@@ -1,0 +1,158 @@
+diff --git a/src/core/file_sys/registered_cache.cpp b/src/core/file_sys/registered_cache.cpp
+index 26e73d260a..3cf793c610 100644
+--- a/src/core/file_sys/registered_cache.cpp
++++ b/src/core/file_sys/registered_cache.cpp
+@@ -1242,6 +1242,27 @@ std::optional<ContentProviderUnionSlot> ContentProviderUnion::GetSlotForEntry(u6
+     return std::nullopt;
+ }
+ 
++VirtualFile ContentProviderUnion::GetLooseAocRomFS(u64 title_id) const {
++    for (const auto* provider : providers) {
++        if (provider) {
++            if (auto romfs = provider->GetLooseAocRomFS(title_id)) return romfs;
++        }
++    }
++    return nullptr;
++}
++
++std::vector<u64> ContentProviderUnion::ListLooseAocTitleIDs() const {
++    std::vector<u64> ids;
++    for (const auto* provider : providers) {
++        if (!provider) continue;
++        const auto next = provider->ListLooseAocTitleIDs();
++        ids.insert(ids.end(), next.begin(), next.end());
++    }
++    std::sort(ids.begin(), ids.end());
++    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
++    return ids;
++}
++
+ const ExternalContentProvider* ContentProviderUnion::GetExternalProvider() const {
+     return static_cast<const ExternalContentProvider*>(providers[size_t(ContentProviderUnionSlot::External)]);
+ }
+@@ -1322,6 +1343,24 @@ bool ManualContentProvider::AddEntriesFromContainer(VirtualFile file, bool only_
+ void ManualContentProvider::ClearAllEntries() {
+     entries.clear();
+     multi_version_entries.clear();
++    loose_aoc_romfs.clear();
++}
++
++void ManualContentProvider::AddLooseAoc(u64 title_id, VirtualFile romfs) {
++    if (romfs) loose_aoc_romfs.insert_or_assign(title_id, std::move(romfs));
++}
++
++VirtualFile ManualContentProvider::GetLooseAocRomFS(u64 title_id) const {
++    const auto it = loose_aoc_romfs.find(title_id);
++    return it == loose_aoc_romfs.end() ? nullptr : it->second;
++}
++
++std::vector<u64> ManualContentProvider::ListLooseAocTitleIDs() const {
++    std::vector<u64> ids;
++    for (const auto& [id, romfs] : loose_aoc_romfs) {
++        if (romfs) ids.push_back(id);
++    }
++    return ids;
+ }
+ 
+ void ManualContentProvider::Refresh() {}
+diff --git a/src/core/file_sys/registered_cache.h b/src/core/file_sys/registered_cache.h
+index 89140a2e95..8b1e5ad475 100644
+--- a/src/core/file_sys/registered_cache.h
++++ b/src/core/file_sys/registered_cache.h
+@@ -8,6 +8,7 @@
+ 
+ #include <array>
+ #include <functional>
++#include <map>
+ #include <memory>
+ #include <optional>
+ #include <string>
+@@ -93,6 +94,10 @@ public:
+     virtual std::unique_ptr<NCA> GetEntry(u64 title_id, ContentRecordType type) const = 0;
+     std::unique_ptr<NCA> GetEntry(ContentProviderEntry entry) const;
+ 
++    // Validated loose AOC data is a RomFS, never a forged NCA entry.
++    virtual VirtualFile GetLooseAocRomFS(u64) const { return nullptr; }
++    virtual std::vector<u64> ListLooseAocTitleIDs() const { return {}; }
++
+     virtual std::vector<ContentProviderEntry> ListEntries() const;
+ 
+     // If a parameter is not std::nullopt, it will be filtered for from all entries.
+@@ -243,6 +248,9 @@ public:
+         std::optional<TitleType> title_type, std::optional<ContentRecordType> record_type,
+         std::optional<u64> title_id) const override;
+ 
++    VirtualFile GetLooseAocRomFS(u64 title_id) const override;
++    std::vector<u64> ListLooseAocTitleIDs() const override;
++
+     const ExternalContentProvider* GetExternalProvider() const;
+     [[nodiscard]] inline const ContentProvider* GetSlotProvider(ContentProviderUnionSlot slot) const {
+         return providers[size_t(slot)];
+@@ -269,6 +277,9 @@ public:
+     bool AddEntriesFromContainer(VirtualFile file, bool only_content = false,
+                                  std::optional<u64> base_program_id = std::nullopt);
+     void ClearAllEntries();
++    void AddLooseAoc(u64 title_id, VirtualFile romfs);
++    VirtualFile GetLooseAocRomFS(u64 title_id) const override;
++    std::vector<u64> ListLooseAocTitleIDs() const override;
+ 
+     void Refresh() override;
+     bool HasEntry(u64 title_id, ContentRecordType type) const override;
+@@ -286,6 +297,7 @@ public:
+ private:
+     std::map<std::tuple<TitleType, ContentRecordType, u64>, VirtualFile> entries;
+     std::vector<ExternalUpdateEntry> multi_version_entries;
++    std::map<u64, VirtualFile> loose_aoc_romfs;
+ };
+ 
+ class ExternalContentProvider : public ContentProvider {
+diff --git a/src/core/hle/service/aoc/addon_content_manager.cpp b/src/core/hle/service/aoc/addon_content_manager.cpp
+index be2aa34baa..364f452f77 100644
+--- a/src/core/hle/service/aoc/addon_content_manager.cpp
++++ b/src/core/hle/service/aoc/addon_content_manager.cpp
+@@ -47,10 +47,17 @@ static std::vector<u64> AccumulateAOCTitleIDs(Core::System& system) {
+         std::remove_if(
+             add_on_content.begin(), add_on_content.end(),
+             [&rcu](u64 tid) {
+-                return rcu.GetEntry(tid, FileSys::ContentRecordType::Data)->GetStatus() !=
+-                       Loader::ResultStatus::Success;
++                const auto entry = rcu.GetEntry(tid, FileSys::ContentRecordType::Data);
++                return !entry || entry->GetStatus() != Loader::ResultStatus::Success;
+             }),
+         add_on_content.end());
++    const auto loose = rcu.ListLooseAocTitleIDs();
++    for (const auto id : loose) {
++        if (rcu.GetLooseAocRomFS(id)) add_on_content.push_back(id);
++    }
++    std::sort(add_on_content.begin(), add_on_content.end());
++    add_on_content.erase(std::unique(add_on_content.begin(), add_on_content.end()),
++                         add_on_content.end());
+     return add_on_content;
+ }
+ 
+diff --git a/src/core/hle/service/filesystem/fsp/fsp_srv.cpp b/src/core/hle/service/filesystem/fsp/fsp_srv.cpp
+index 58303a0bd6..c19275526a 100644
+--- a/src/core/hle/service/filesystem/fsp/fsp_srv.cpp
++++ b/src/core/hle/service/filesystem/fsp/fsp_srv.cpp
+@@ -26,6 +26,7 @@
+ #include "core/file_sys/patch_manager.h"
+ #include "core/file_sys/romfs.h"
+ #include "core/file_sys/romfs_factory.h"
++#include "core/file_sys/registered_cache.h"
+ #include "core/file_sys/savedata_factory.h"
+ #include "core/file_sys/system_archive/system_archive.h"
+ #include "core/file_sys/vfs/vfs.h"
+@@ -513,6 +514,13 @@ Result FSP_SRV::OpenDataStorageByDataId(OutInterface<IStorage> out_interface,
+     LOG_DEBUG(Service_FS, "called with storage_id={:02X}, unknown={:08X}, title_id={:016X}",
+               storage_id, unknown, title_id);
+ 
++    // Loose AOC is exposed only after the frontend validates its exact edition receipt.
++    // It has no NCA and must not pass through PatchManager as one.
++    if (auto loose = content_provider.GetLooseAocRomFS(title_id)) {
++        *out_interface = std::make_shared<IStorage>(system, std::move(loose));
++        R_SUCCEED();
++    }
++
+     auto data = romfs_controller->OpenRomFS(title_id, storage_id, FileSys::ContentRecordType::Data);
+ 
+     if (!data) {

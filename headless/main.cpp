@@ -1,4 +1,5 @@
 #include "core/arm/debug.h"
+#include "core/file_sys/romfs.h"
 #include "core/hle/kernel/k_light_lock.h"
 #include "core/hle/kernel/k_thread.h"
 // Opt-in controls and snapshots for reproducible Mario Kart profiling.
@@ -281,11 +282,13 @@ int main(int argc, char** argv) {
         Eden::FileExists("/app0/providers/switch2/eboot.bin");
     SCOPE_EXIT { if (nested_emuhub) ReturnToEmuHubFrontend(); };
     std::string provider_rom;
+    bool wonder_edition_route = false;
     if (nested_emuhub) {
         Eden::EmuHubProviderMode() = true;
         const auto ticket = emuhub_switch2::consume(emuhub_switch2::kRequest.data());
         if (!ticket) return 2;
         provider_rom = ticket->boot;
+        wonder_edition_route = ticket->edition;
     }
 #endif
     try {
@@ -314,7 +317,8 @@ int main(int argc, char** argv) {
 #endif
         Eden::FilesystemAccessStatus() = static_cast<int>(elevation::request(
             elevation::Capability::filesystem, Eden::EmuHubProviderMode() ? nullptr : "/app0/lapy.elf"));
-        if (nested_emuhub && (!Eden::FilesystemAccess() || !emuhub_switch2::ready())) return 2;
+        if (nested_emuhub && (!Eden::FilesystemAccess() ||
+            !(wonder_edition_route ? emuhub_switch2::edition_ready() : emuhub_switch2::ready()))) return 2;
         Eden::BootTrace::Line("filesystem access returned status=%d, uid %d/%d gid %d/%d", Eden::FilesystemAccessStatus(),
                               static_cast<int>(getuid()), static_cast<int>(geteuid()), static_cast<int>(getgid()),
                               static_cast<int>(getegid()));
@@ -1430,13 +1434,35 @@ int main(int argc, char** argv) {
                 system.SetShuttingDown(false);
                 // Update and DLC files (NSP or XCI) in the game files' updates folder apply to their
                 // base game: Eden's ExternalContentProvider, which the patch manager checks first.
+#ifdef PS5_NATIVE
+                if (wonder_edition_route) Settings::values.external_content_dirs.clear();
+                else Settings::values.external_content_dirs = {Eden::AssetsPath("updates")};
+#else
                 Settings::values.external_content_dirs = {Eden::AssetsPath("updates")};
+#endif
                 system.GetFileSystemController().CreateFactories(*system.GetFilesystem());
                 // The game's own contents, registered as Eden's desktop frontends do before booting a
                 // game (ConfigureFilesystemProvider). An update's data is a patch on the base game's:
                 // the patch manager looks the base up here, and without it applied only the update's
                 // code, which then ran against the old data. It also gives Eden the game's control data.
                 game_contents.ClearAllEntries();
+#ifdef PS5_NATIVE
+                if (wonder_edition_route) {
+                    // AOC stays distinct from base/update RomFS; do not advertise it without storage.
+                    const auto aoc_dir = system.GetFilesystem()->OpenDirectory(
+                        emuhub_switch2::kEditionAoc, FileSys::OpenMode::Read);
+                    if (!aoc_dir) {
+                        Eden::Report("loader", "Wonder Edition AOC directory unavailable");
+                        return 2;
+                    }
+                    auto aoc_romfs = FileSys::CreateRomFS(aoc_dir);
+                    if (!aoc_romfs) {
+                        Eden::Report("loader", "Wonder Edition AOC RomFS unavailable");
+                        return 2;
+                    }
+                    game_contents.AddLooseAoc(emuhub_switch2::kEditionAocId, std::move(aoc_romfs));
+                }
+#endif
                 if (game && guest && !game_contents.AddEntriesFromContainer(
                         system.GetFilesystem()->OpenFile(guest, FileSys::OpenMode::Read)))
                     Eden::Report("loader", "Game contents not registered; an update's data will not apply");
