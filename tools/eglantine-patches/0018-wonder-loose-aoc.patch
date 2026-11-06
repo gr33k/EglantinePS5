@@ -1,11 +1,20 @@
 diff --git a/src/core/file_sys/registered_cache.cpp b/src/core/file_sys/registered_cache.cpp
-index 26e73d260a..3cf793c610 100644
+index 26e73d260a..b72fde8cd6 100644
 --- a/src/core/file_sys/registered_cache.cpp
 +++ b/src/core/file_sys/registered_cache.cpp
-@@ -1242,6 +1242,27 @@ std::optional<ContentProviderUnionSlot> ContentProviderUnion::GetSlotForEntry(u6
+@@ -1242,6 +1242,36 @@ std::optional<ContentProviderUnionSlot> ContentProviderUnion::GetSlotForEntry(u6
      return std::nullopt;
  }
  
++VirtualFile ContentProviderUnion::GetLooseProgramRomFS(u64 title_id) const {
++    for (const auto* provider : providers) {
++        if (provider) {
++            if (auto romfs = provider->GetLooseProgramRomFS(title_id)) return romfs;
++        }
++    }
++    return nullptr;
++}
++
 +VirtualFile ContentProviderUnion::GetLooseAocRomFS(u64 title_id) const {
 +    for (const auto* provider : providers) {
 +        if (provider) {
@@ -30,11 +39,22 @@ index 26e73d260a..3cf793c610 100644
  const ExternalContentProvider* ContentProviderUnion::GetExternalProvider() const {
      return static_cast<const ExternalContentProvider*>(providers[size_t(ContentProviderUnionSlot::External)]);
  }
-@@ -1322,6 +1343,24 @@ bool ManualContentProvider::AddEntriesFromContainer(VirtualFile file, bool only_
+@@ -1322,6 +1352,35 @@ bool ManualContentProvider::AddEntriesFromContainer(VirtualFile file, bool only_
  void ManualContentProvider::ClearAllEntries() {
      entries.clear();
      multi_version_entries.clear();
++    loose_program_romfs.clear();
 +    loose_aoc_romfs.clear();
++}
++
++void ManualContentProvider::AddLooseProgramLayer(u64 title_id, u32 update_version, VirtualFile merged_romfs) {
++    if (update_version && merged_romfs)
++        loose_program_romfs.insert_or_assign(title_id, std::make_pair(update_version, std::move(merged_romfs)));
++}
++
++VirtualFile ManualContentProvider::GetLooseProgramRomFS(u64 title_id) const {
++    const auto it = loose_program_romfs.find(title_id);
++    return it == loose_program_romfs.end() ? nullptr : it->second.second;
 +}
 +
 +void ManualContentProvider::AddLooseAoc(u64 title_id, VirtualFile romfs) {
@@ -55,8 +75,17 @@ index 26e73d260a..3cf793c610 100644
  }
  
  void ManualContentProvider::Refresh() {}
+@@ -1331,6 +1390,8 @@ bool ManualContentProvider::HasEntry(u64 title_id, ContentRecordType type) const
+ }
+ 
+ std::optional<u32> ManualContentProvider::GetEntryVersion(u64 title_id) const {
++    const auto it = loose_program_romfs.find(title_id);
++    if (it != loose_program_romfs.end()) return it->second.first;
+     return std::nullopt;
+ }
+ 
 diff --git a/src/core/file_sys/registered_cache.h b/src/core/file_sys/registered_cache.h
-index 89140a2e95..8b1e5ad475 100644
+index 89140a2e95..42a08e696a 100644
 --- a/src/core/file_sys/registered_cache.h
 +++ b/src/core/file_sys/registered_cache.h
 @@ -8,6 +8,7 @@
@@ -67,45 +96,82 @@ index 89140a2e95..8b1e5ad475 100644
  #include <memory>
  #include <optional>
  #include <string>
-@@ -93,6 +94,10 @@ public:
+@@ -93,6 +94,11 @@ public:
      virtual std::unique_ptr<NCA> GetEntry(u64 title_id, ContentRecordType type) const = 0;
      std::unique_ptr<NCA> GetEntry(ContentProviderEntry entry) const;
  
 +    // Validated loose AOC data is a RomFS, never a forged NCA entry.
++    virtual VirtualFile GetLooseProgramRomFS(u64) const { return nullptr; }
 +    virtual VirtualFile GetLooseAocRomFS(u64) const { return nullptr; }
 +    virtual std::vector<u64> ListLooseAocTitleIDs() const { return {}; }
 +
      virtual std::vector<ContentProviderEntry> ListEntries() const;
  
      // If a parameter is not std::nullopt, it will be filtered for from all entries.
-@@ -243,6 +248,9 @@ public:
+@@ -243,6 +249,10 @@ public:
          std::optional<TitleType> title_type, std::optional<ContentRecordType> record_type,
          std::optional<u64> title_id) const override;
  
++    VirtualFile GetLooseProgramRomFS(u64 title_id) const override;
 +    VirtualFile GetLooseAocRomFS(u64 title_id) const override;
 +    std::vector<u64> ListLooseAocTitleIDs() const override;
 +
      const ExternalContentProvider* GetExternalProvider() const;
      [[nodiscard]] inline const ContentProvider* GetSlotProvider(ContentProviderUnionSlot slot) const {
          return providers[size_t(slot)];
-@@ -269,6 +277,9 @@ public:
+@@ -269,6 +279,11 @@ public:
      bool AddEntriesFromContainer(VirtualFile file, bool only_content = false,
                                   std::optional<u64> base_program_id = std::nullopt);
      void ClearAllEntries();
++    void AddLooseProgramLayer(u64 title_id, u32 update_version, VirtualFile merged_romfs);
 +    void AddLooseAoc(u64 title_id, VirtualFile romfs);
++    VirtualFile GetLooseProgramRomFS(u64 title_id) const override;
 +    VirtualFile GetLooseAocRomFS(u64 title_id) const override;
 +    std::vector<u64> ListLooseAocTitleIDs() const override;
  
      void Refresh() override;
      bool HasEntry(u64 title_id, ContentRecordType type) const override;
-@@ -286,6 +297,7 @@ public:
+@@ -286,6 +301,8 @@ public:
  private:
      std::map<std::tuple<TitleType, ContentRecordType, u64>, VirtualFile> entries;
      std::vector<ExternalUpdateEntry> multi_version_entries;
++    std::map<u64, std::pair<u32, VirtualFile>> loose_program_romfs;
 +    std::map<u64, VirtualFile> loose_aoc_romfs;
  };
  
  class ExternalContentProvider : public ContentProvider {
+diff --git a/src/core/file_sys/romfs_factory.cpp b/src/core/file_sys/romfs_factory.cpp
+index 517872547c..ceb7891602 100644
+--- a/src/core/file_sys/romfs_factory.cpp
++++ b/src/core/file_sys/romfs_factory.cpp
+@@ -38,6 +38,7 @@ void RomFSFactory::SetPackedUpdate(VirtualFile update_raw_file) {
+ }
+ 
+ VirtualFile RomFSFactory::OpenCurrentProcess(u64 current_process_title_id) const {
++    if (auto loose = content_provider.GetLooseProgramRomFS(current_process_title_id)) return loose;
+     if (!updatable) {
+         return file;
+     }
+@@ -50,6 +51,9 @@ VirtualFile RomFSFactory::OpenCurrentProcess(u64 current_process_title_id) const
+ }
+ 
+ VirtualFile RomFSFactory::OpenPatchedRomFS(u64 title_id, ContentRecordType type) const {
++    if (type == ContentRecordType::Program) {
++        if (auto loose = content_provider.GetLooseProgramRomFS(title_id)) return loose;
++    }
+     auto nca = content_provider.GetEntry(title_id, type);
+ 
+     if (nca == nullptr) {
+@@ -69,6 +73,9 @@ VirtualFile RomFSFactory::OpenPatchedRomFSWithProgramIndex(u64 title_id, u8 prog
+ }
+ 
+ VirtualFile RomFSFactory::Open(u64 title_id, StorageId storage, ContentRecordType type) const {
++    if (storage == StorageId::None && type == ContentRecordType::Program) {
++        if (auto loose = content_provider.GetLooseProgramRomFS(title_id)) return loose;
++    }
+     const std::shared_ptr<NCA> res = GetEntry(title_id, storage, type);
+     if (res == nullptr) {
+         return nullptr;
 diff --git a/src/core/hle/service/aoc/addon_content_manager.cpp b/src/core/hle/service/aoc/addon_content_manager.cpp
 index be2aa34baa..364f452f77 100644
 --- a/src/core/hle/service/aoc/addon_content_manager.cpp

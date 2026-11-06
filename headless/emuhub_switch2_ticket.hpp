@@ -26,11 +26,14 @@ inline constexpr std::string_view kReadyBody = "EMUHUB-SWITCH2-READY-1\n57d67e43
 inline constexpr std::string_view kEditionKey = "Wonder-010015100B514000-edition-1.2.0.dir";
 inline constexpr std::string_view kEditionSource = "ns2:010015100B514000:edition:327680:aoc:010015100B515001";
 inline constexpr std::string_view kEditionBoot = "/mnt/usb0/eglantineps5/roms/Wonder-010015100B514000-edition-327680/exefs/main";
+inline constexpr std::string_view kEditionRomFS = "/mnt/usb0/eglantineps5/roms/Wonder-010015100B514000-edition-327680/romfs";
 inline constexpr std::string_view kEditionAoc = "/mnt/usb0/eglantineps5/roms/Wonder-010015100B514000-edition-327680/aoc/010015100B515001/romfs";
 inline constexpr std::string_view kEditionReady = "/app0/config/switch2-wonder-edition-verified.txt";
 inline constexpr std::string_view kEditionRootSha = "460c025c23fcbd32fffb49ce87647bf0a7d895f21af5ecbd1c6717dbf227efdc";
 inline constexpr std::string_view kEditionManifest = "462f96f78686b4083dce956d69cff7360733308b048abb0b9617bf7dcadf25bd";
 inline constexpr std::string_view kEditionMagic = "EMUHUB-SWITCH2-EDITION-1\n";
+inline constexpr std::uint64_t kEditionBaseId = 0x010015100B514000ULL;
+inline constexpr std::uint32_t kEditionUpdateVersion = 327680;
 inline constexpr std::uint64_t kEditionAocId = 0x010015100B515001ULL;
 
 inline bool source_matches(std::string_view key, std::string_view source) {

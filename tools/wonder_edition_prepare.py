@@ -12,6 +12,7 @@ import sys
 
 from nup.read import NupReader
 from nup.access import iter_children
+from nup import format as F
 
 ROOT_SHA = '460c025c23fcbd32fffb49ce87647bf0a7d895f21af5ecbd1c6717dbf227efdc'
 TOC_SHA = '9d073c56b6d04cc230d7eafc88aafaccbcd5b9addc032623b212d7dcf6625853'
@@ -48,6 +49,11 @@ def merge_entries(base, update):
     merged.update(update)
     return merged
 
+def update_package_allowed(base_id, update_id, npdm_id):
+    """Accept native package IDs with or without the conventional 0x800 update bit."""
+    base = int(base_id, 16)
+    return int(update_id, 16) in (base, base | 0x800) and int(npdm_id, 16) == base
+
 def canonical_digest(entries):
     lines = (f'{name}\t{info["bytes"]}\t{info["sha256"]}\n' for name, info in sorted(entries.items()))
     return hashlib.sha256(''.join(lines).encode()).hexdigest()
@@ -59,19 +65,49 @@ def source_hash(path):
             h.update(chunk)
     return h.hexdigest()
 
+class ExtentReader:
+    def __init__(self, fd, offset, size):
+        self.fd, self.offset, self.remaining = fd, offset, size
+    def read(self, count=-1):
+        if not self.remaining: return b''
+        take = min(self.remaining, count if count > 0 else 4 * 1024 * 1024)
+        data = os.pread(self.fd, take, self.offset)
+        if not data: raise ValueError('short NUP extent')
+        self.offset += len(data); self.remaining -= len(data)
+        return data
+
+def member_chunks(reader, index):
+    _, size, _, offset, extent_size, codec = reader.file_info(index)
+    raw = ExtentReader(reader._fh.fileno(), offset, extent_size)
+    if codec == F.CODEC_RAW:
+        if extent_size != size: raise ValueError('raw extent length mismatch')
+        stream = raw
+    elif codec == F.CODEC_ZSTD:
+        import zstandard
+        stream = zstandard.ZstdDecompressor().stream_reader(raw)
+    else:
+        raise ValueError('unknown NUP codec')
+    try:
+        while chunk := stream.read(4 * 1024 * 1024):
+            yield chunk
+    finally:
+        if codec == F.CODEC_ZSTD: stream.close()
+    if raw.remaining:
+        raise ValueError('compressed extent not fully consumed')
+
 def write_member(reader, dest, rel, info, replace=False):
     target = dest / rel
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.is_symlink() or (target.exists() and not replace):
         raise ValueError('destination collision')
-    data = reader.read_file(info['index'])
-    if len(data) != info['bytes'] or hashlib.sha256(data).hexdigest() != info['sha256']:
-        raise ValueError('member SHA mismatch')
     tmp = target.with_name(target.name + '.nup-part')
+    h = hashlib.sha256(); count = 0
     with tmp.open('xb') as out:
-        out.write(data)
-        out.flush()
-        os.fsync(out.fileno())
+        for chunk in member_chunks(reader, info['index']):
+            h.update(chunk); count += len(chunk); out.write(chunk)
+        out.flush(); os.fsync(out.fileno())
+    if count != info['bytes'] or h.hexdigest() != info['sha256']:
+        raise ValueError('member SHA/size mismatch')
     os.replace(tmp, target)
 
 def run(args):
@@ -91,7 +127,8 @@ def run(args):
             ('base', BASE, 0), ('update', BASE, UPDATE), ('addon', AOC, 0)]:
             raise ValueError('package identities mismatch')
         base, update, addon = [package_files(reader, p) for p in packages]
-        if packages[1].flags != 0 or any(not rel.startswith('romfs/') for rel in addon):
+        if (not update_package_allowed(BASE, format(packages[1].title_id, '016X'), BASE) or
+            packages[1].flags != 0 or any(not rel.startswith('romfs/') for rel in addon)):
             raise ValueError('unexpected update/add-on package shape')
         for files in (base, update):
             npdm = reader.read_file(files['exefs/main.npdm']['index'])

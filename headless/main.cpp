@@ -277,12 +277,12 @@ static void ReturnToEmuHubFrontend() {
 extern "C" int eden_emuhub_provider_mode() { return Eden::EmuHubProviderMode() ? 1 : 0; }
 
 int main(int argc, char** argv) {
+    bool wonder_edition_route = false;
 #ifdef PS5_NATIVE
     const bool nested_emuhub = Eden::FileExists("/app0/es-de/es-de.bin") &&
         Eden::FileExists("/app0/providers/switch2/eboot.bin");
     SCOPE_EXIT { if (nested_emuhub) ReturnToEmuHubFrontend(); };
     std::string provider_rom;
-    bool wonder_edition_route = false;
     if (nested_emuhub) {
         Eden::EmuHubProviderMode() = true;
         const auto ticket = emuhub_switch2::consume(emuhub_switch2::kRequest.data());
@@ -1448,7 +1448,18 @@ int main(int argc, char** argv) {
                 game_contents.ClearAllEntries();
 #ifdef PS5_NATIVE
                 if (wonder_edition_route) {
-                    // AOC stays distinct from base/update RomFS; do not advertise it without storage.
+                    // Register a verified merged program RomFS by title/version. AOC stays
+                    // separate and is never advertised without its own storage.
+                    const auto program_dir = system.GetFilesystem()->OpenDirectory(
+                        emuhub_switch2::kEditionRomFS, FileSys::OpenMode::Read);
+                    if (!program_dir) {
+                        Eden::Report("loader", "Wonder Edition merged RomFS unavailable");
+                        return 2;
+                    }
+                    auto program_romfs = FileSys::CreateRomFS(program_dir);
+                    if (!program_romfs) return 2;
+                    game_contents.AddLooseProgramLayer(emuhub_switch2::kEditionBaseId,
+                        emuhub_switch2::kEditionUpdateVersion, std::move(program_romfs));
                     const auto aoc_dir = system.GetFilesystem()->OpenDirectory(
                         emuhub_switch2::kEditionAoc, FileSys::OpenMode::Read);
                     if (!aoc_dir) {
@@ -1463,7 +1474,8 @@ int main(int argc, char** argv) {
                     game_contents.AddLooseAoc(emuhub_switch2::kEditionAocId, std::move(aoc_romfs));
                 }
 #endif
-                if (game && guest && !game_contents.AddEntriesFromContainer(
+                if (game && guest && !wonder_edition_route &&
+                    !game_contents.AddEntriesFromContainer(
                         system.GetFilesystem()->OpenFile(guest, FileSys::OpenMode::Read)))
                     Eden::Report("loader", "Game contents not registered; an update's data will not apply");
                 system.RegisterContentProvider(FileSys::ContentProviderUnionSlot::FrontendManual, &game_contents);
