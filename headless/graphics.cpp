@@ -376,7 +376,9 @@ public:
         const auto text = FormatHudText(clock, speed_percent, "OGL", machine, RoomPingMilliseconds(),
                                         hud_fields.load(std::memory_order_relaxed));
         if (hud_enabled.load(std::memory_order_relaxed)) DrawHud(text.data(), false);
+        const auto menu_drawn = DrawMenu();
         Check(eglSwapBuffers(display, surface), "eglSwapBuffers");
+        SwitchMenu::MarkPresented(menu_drawn);
     }
     void PresentLoading() {
         const double now = Now();
@@ -388,12 +390,14 @@ public:
             for (unsigned i = 0; i < dots; ++i) text[7 + i] = '.';
             DrawHud(text, true);
         }
+        const auto menu_drawn = DrawMenu();
         Check(eglSwapBuffers(display, surface), "loading swap");
+        SwitchMenu::MarkPresented(menu_drawn);
         if (loading_frames++ < 4) std::printf("EDEN_LOADING frame=%u scene=%d\n", loading_frames, !loading_failed);
     }
     // idle: the GPU thread has no game commands waiting (hud.h, LoadingPace).
     bool LoadingTick(bool idle) {
-        if (!loading) return false;
+        if (!loading && !SwitchMenu::Open()) return false;
         if (loading_pace.Due(Now(), idle)) PresentLoading();
         return true;
     }
@@ -462,8 +466,8 @@ private:
         glFlush();
         return true;
     }
-    void DrawHud(const char* text, bool startup) {
-        if (!window_owner) return;
+    bool DrawHud(const char* text, bool startup, bool menu = false, unsigned menu_row = 0) {
+        if (!window_owner) return false;
         // A separate context on this same thread isolates guest GL state and queries.
         Check(eglMakeCurrent(display, surface, surface, hud_context), "HUD current");
         SCOPE_EXIT { Cleanup(eglMakeCurrent(display, surface, surface, context), "HUD restore"); };
@@ -512,18 +516,28 @@ private:
         line.x = static_cast<uint32_t>(std::clamp(hud_corner.load(std::memory_order_relaxed), 0, kHudCorners - 1));
         line.y = static_cast<uint32_t>(std::clamp(hud_size.load(std::memory_order_relaxed), 0, kHudSizes - 1));
         const auto place = PlaceHud(line, static_cast<uint32_t>(width), static_cast<uint32_t>(height));
-        if (!startup && !place.shown) return;
-        const float cell = 4.0f * static_cast<float>(startup ? height : place.cell_rows) / 1080.0f;
+        const int menu_x = units(SwitchMenu::kX);
+        const int menu_y = units(SwitchMenu::kY + SwitchMenu::kStep * menu_row);
+        const int menu_w = units(SwitchMenu::kWidth);
+        const int menu_h = units(SwitchMenu::kHeight);
+        if (menu && (menu_w <= 0 || menu_h <= 0 || menu_x < 0 || menu_y < 0 ||
+                     menu_x + menu_w > width || menu_y + menu_h > height)) return false;
+        if (!startup && !menu && !place.shown) return false;
+        const float cell = 4.0f * static_cast<float>(startup || menu ? height : place.cell_rows) / 1080.0f;
         if (startup)
             glViewport(0, 0, width, height);
+        else if (menu)
+            glViewport(menu_x, height - menu_y - menu_h, menu_w, menu_h);
         else
             glViewport(int(place.box_x), height - int(place.box_y + place.box_h), int(place.box_w), int(place.box_h));
         const auto glyphs = HudText(text);
         glUniform1uiv(glGetUniformLocation(hud_program, "glyphs[0]"), glyphs.size(), glyphs.data());
         glUniform2i(glGetUniformLocation(hud_program, "origin"),
-                    startup ? (width - units(text_width)) / 2 : int(place.text_x),
+                    startup ? (width - units(text_width)) / 2 :
+                        menu ? menu_x + units(12) : int(place.text_x),
                     startup ? (height - units(20)) / 2 :
-                              height - int(place.text_y) - int(std::lround(5.0f * cell)));
+                        menu ? height - menu_y - units(30) :
+                               height - int(place.text_y) - int(std::lround(5.0f * cell)));
         glUniform1i(glGetUniformLocation(hud_program, "startup"), startup);
         glUniform1f(glGetUniformLocation(hud_program, "cell"), cell);
         if (!startup) {
@@ -532,6 +546,13 @@ private:
         }
         glDrawArrays(GL_TRIANGLES, 0, 3);
         glFlush();
+        return true;
+    }
+    std::uint32_t DrawMenu() {
+        const auto state = SwitchMenu::view.load(std::memory_order_acquire);
+        return SwitchMenu::DrawAllRows(state, [this](unsigned row, std::string_view line) {
+            return DrawHud(line.data(), false, true, row);
+        });
     }
     unsigned presented_frames{}, loading_frames{};
     bool loading{true}, loading_failed{};
@@ -575,16 +596,27 @@ void ToggleHud() {
 HudSnapshot GetVulkanHud() {
     return vulkan_loading || hud_enabled.load(std::memory_order_relaxed) ? vulkan_hud : HudSnapshot{};
 }
+HudSnapshot GetVulkanMenuLine(std::uint64_t state, unsigned row) {
+    HudSnapshot snapshot{};
+    if (static_cast<SwitchMenu::Page>(state & 0xffu) == SwitchMenu::Page::closed ||
+        row >= SwitchMenu::kRows) return snapshot;
+    snapshot.glyphs = HudText(SwitchMenu::Line(state, row));
+    snapshot.width = SwitchMenu::kWidth;
+    snapshot.x = SwitchMenu::kX;
+    snapshot.y = SwitchMenu::kY + row * SwitchMenu::kStep;
+    snapshot.loading = 0x80000000u; // menu overlay, not a loading scene
+    return snapshot;
+}
 // idle: the GPU thread has no game commands waiting (hud.h, LoadingPace).
 bool LoadingTick(VideoCore::RendererBase& renderer, bool idle) {
 #ifdef EDEN_PS5_VULKAN
-    if (vulkan_loading) {
+    if (vulkan_loading || SwitchMenu::Open()) {
         const double now = std::chrono::duration<double>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
         const bool first = vulkan_loading_start < 0;
         if (first) vulkan_loading_start = now;
         if (vulkan_loading_pace.Due(now, idle)) {
-            vulkan_hud = MakeLoadingSnapshot(now - vulkan_loading_start + LoadingCalm());
+            vulkan_hud = vulkan_loading ? MakeLoadingSnapshot(now - vulkan_loading_start + LoadingCalm()) : HudSnapshot{};
             // With the split GPU thread the renderer belongs to the back thread (gpu_split.h):
             // presenting from the front raced its composites in the scheduler and the blit
             // screen's layers (a descriptor set allocation failed, then a null layer crashed).
@@ -592,7 +624,8 @@ bool LoadingTick(VideoCore::RendererBase& renderer, bool idle) {
             if (auto& split = VideoCommon::GpuSplit::Get();
                 split.Active() && !VideoCommon::GpuSplit::OnBackThread()) {
                 split.DeferFunction([&renderer] {
-                    if (vulkan_loading.load(std::memory_order_relaxed)) PresentVulkanLoading(renderer);
+                    if (vulkan_loading.load(std::memory_order_relaxed) || SwitchMenu::Open())
+                        PresentVulkanLoading(renderer);
                 });
                 split.Publish();
             } else {

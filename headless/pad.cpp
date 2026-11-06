@@ -7,6 +7,7 @@
 #include "common/input.h"
 #include "common/logging.h"
 #include "gameplay_test.h"
+#include "switch_menu_view.h"
 #include "input_common/input_poller.h"
 #include <utility>
 
@@ -222,6 +223,8 @@ void Pad::Rescan() {
     }
 }
 void Pad::Close() {
+    menu.reset();
+    menu_generation = SwitchMenu::Publish(menu.page(), menu.choice());
     engine->ResetControllers();
     u64 haptic_outputs = 0, haptic_errors = 0, haptic_fallbacks = 0;
     for (const auto& slot : slots) {
@@ -372,18 +375,54 @@ void Pad::Consume(std::size_t player, std::span<const ps5::pad::Data> samples) {
     for (const auto& raw : samples) {
         if (recording) GameplayTest::Record(raw);
         auto sample = is_usable(raw) ? raw : neutral_data(raw.timestamp_us);
-        // The shortcuts work from every controller.
-        constexpr ButtonMask menu_chord = kButtonTouchPad | kButtonL1;
+        // Player 1 owns the EmuHub menu. Touchpad+L1 is never an exit shortcut.
+        constexpr ButtonMask old_chord = kButtonTouchPad | kButtonL1;
         constexpr ButtonMask hud_chord = kButtonTouchPad | kButtonR1;
         const auto pressed = sample.buttons;
-        if ((pressed & menu_chord) == menu_chord &&
-            (last_buttons & menu_chord) != menu_chord)
-            return_to_menu = true;
+        const bool legacy = (pressed & old_chord) == old_chord;
+        if (player == 0) {
+            using namespace emuhub_switch_menu;
+            std::uint32_t controls = 0;
+            if (pressed & kButtonTouchPad) controls |= touchpad;
+            if (pressed & kButtonOptions) controls |= options;
+            if (pressed & kButtonUp) controls |= up;
+            if (pressed & kButtonDown) controls |= emuhub_switch_menu::down;
+            if (pressed & kButtonCross) controls |= cross;
+            if (pressed & kButtonCircle) controls |= circle;
+            const auto old_page = menu.page();
+            const auto old_choice = menu.choice();
+            const auto action = menu.consume(controls, SwitchMenu::Visible(menu_generation));
+            if (menu.page() != old_page || menu.choice() != old_choice)
+                menu_generation = SwitchMenu::Publish(menu.page(), menu.choice());
+            if (action == Action::exit_confirmed) return_to_menu = true;
+            if (action == Action::opened)
+                for (auto& player_slot : slots) player_slot.suppress_until_release = true;
+        }
+        if (menu.captures_game_input() || slot.suppress_until_release || legacy) {
+            slot.suppress_until_release = true;
+            slot.touch_chord = true;
+            slot.select_held = false;
+            slot.select_pulse = 0;
+            slot.touch_polls = 0;
+            last_buttons = pressed;
+            engine->ResetControllers();
+            const auto centered = [](u8 axis) { return axis >= 120 && axis <= 136; };
+            const bool neutral = pressed == 0 && sample.triggers.l2 < 16 &&
+                sample.triggers.r2 < 16 && centered(sample.left_stick.x) &&
+                centered(sample.left_stick.y) && centered(sample.right_stick.x) &&
+                centered(sample.right_stick.y);
+            if (!menu.captures_game_input() && neutral) {
+                slot.suppress_until_release = false;
+                slot.touch_chord = false;
+                last_buttons = 0;
+            }
+            continue;
+        }
         if ((pressed & hud_chord) == hud_chord &&
             (last_buttons & hud_chord) != hud_chord)
             hud_toggle = true;
-        if ((pressed & menu_chord) == menu_chord || (pressed & hud_chord) == hud_chord)
-            sample.buttons &= ~(kButtonTouchPad | kButtonL1 | kButtonR1);
+        if ((pressed & hud_chord) == hud_chord)
+            sample.buttons &= ~(kButtonTouchPad | kButtonR1);
         // The touchpad on its own: see kSelectTapPolls.
         const bool touch = (pressed & kButtonTouchPad) != 0;
         const bool touched = (last_buttons & kButtonTouchPad) != 0;

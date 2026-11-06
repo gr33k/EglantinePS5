@@ -356,7 +356,7 @@ void Launcher::draw_settings(Canvas &c)
         about = tr("Vibration, button mapping and the shortcuts during a game.");
         lines = {{tr("VIBRATION"), prefs_.vibration ? percent(prefs_.vibration_strength) : on_off(false)},
                  {tr("BUTTON MAPPING"), prefs_.mapping == kDefaultMapping ? tr("As usual") : tr("Changed")},
-                 {tr("END GAME"), std::string(tr("Touchpad")) + " + L1"},
+                 {tr("EMUHUB MENU"), std::string(tr("Touchpad")) + " + Options"},
                  {tr("FPS OVERLAY"), std::string(tr("Touchpad")) + " + R1"}};
         break;
     case kAccessibility:
