@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "switch_menu_view.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -73,6 +74,16 @@ inline uint32_t HudGlyph(char c) {
     case 'V': return 0x5b6a;
     case 'K': return 0x5bad;
     case 'W': return 0x5fed;
+    case 'B': return 0x6bae;
+    case 'C': return 0x724e;
+    case 'E': return 0x792f;
+    case 'H': return 0x5bed;
+    case 'M': return 0x5fed;
+    case 'R': return 0x6bad;
+    case 'T': return 0x7492;
+    case 'U': return 0x5b6f;
+    case 'Y': return 0x5a92;
+    case 'X': return 0x5a8b;
     case '.': return 0x0002;
     case '-': return 0x01c0;
     default: return 0;
@@ -221,4 +232,5 @@ inline HudSnapshot MakeHudSnapshot(const HudClock& clock, double speed) {
 void CountPresentedFrame();
 // Read on the renderer thread; the scheduler captures the returned value per frame.
 HudSnapshot GetVulkanHud();
+HudSnapshot GetVulkanMenuLine(std::uint64_t state, unsigned row);
 } // namespace Eden

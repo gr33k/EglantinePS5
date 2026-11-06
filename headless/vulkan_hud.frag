@@ -16,7 +16,7 @@ void main() {
         text.glyphs[16], text.glyphs[17], text.glyphs[18], text.glyphs[19],
         text.glyphs[20], text.glyphs[21], text.glyphs[22], text.glyphs[23],
         text.glyphs[24], text.glyphs[25], text.glyphs[26], text.glyphs[27]);
-    if (text.loading != 0u) {
+    if (text.loading != 0u && text.loading != 0x80000000u) {
         // The loading screen: x and y carry the picture's size, loading the milliseconds since
         // it began (plus one), the glyphs' words what the start is doing (hud.h). Vulkan counts
         // rows from the top.

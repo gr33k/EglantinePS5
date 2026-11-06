@@ -1455,11 +1455,8 @@ int main(int argc, char** argv) {
                     .applet_id = Service::AM::AppletId::Application,
                 };
 #ifdef PS5_NATIVE
-                // While a game loads nothing else reads the controller, so Touchpad + L1 did nothing
-                // until the game ran: a load that hung could only be left by closing EglantinePS5.
-                // Now it is heard here too. The stop limit starts at the press (stop_limit.h): a
-                // load that finishes within it ends as a normal stop, one that does not ends with
-                // the app starting again at the launcher.
+                // Poll the EmuHub menu while loading as well. Only a visible menu and
+                // deliberate Return confirmation may request a game stop.
                 std::atomic<bool> left_while_loading{false};
                 std::jthread load_watch;
                 if (pad && game) load_watch = std::jthread([&](std::stop_token stop) {
@@ -1474,7 +1471,7 @@ int main(int argc, char** argv) {
                         const bool asked = false;
 #endif
                         if (pad->TakeReturnToMenu() || asked) {
-                            Eden::Report("exit", "Touchpad + L1 while the game loads: leaving as soon as it can be stopped");
+                            Eden::Report("exit", "Confirmed EmuHub menu return while loading");
                             Eden::StopLimit::Begin();
                             left_while_loading = true;
                             break;

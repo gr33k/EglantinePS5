@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "devices.h"
+#include "switch_menu_view.h"
 #include "controller_applet.h"
 #include "keyboard_applet.h"
 #include <condition_variable>
@@ -269,7 +270,7 @@ void CheckPad() {
         };
         sample.triggers = {};
         sample.buttons = kButtonTouchPad | kButtonL1; consume();
-        CHECK(pad.TakeReturnToMenu()); CHECK(!pad.TakeReturnToMenu());
+        CHECK(!pad.TakeReturnToMenu()); CHECK(!pad.MenuOpen());
         CHECK(none_pressed());
         consume(); CHECK(!pad.TakeReturnToMenu());
         sample.buttons = 0; consume();
@@ -304,7 +305,37 @@ void CheckPad() {
         // Create is Minus directly, also while the touchpad is down.
         sample.buttons = kButtonCreate | kButtonTouchPad; consume(); CHECK(pad.Engine().GetButton({}, 11));
         sample.buttons = kButtonTouchPad; consume(); CHECK(none_pressed());
-        sample.buttons = kButtonTouchPad | kButtonL1; consume(); CHECK(pad.TakeReturnToMenu());
+        sample.buttons = kButtonTouchPad | kButtonL1; consume();
+        CHECK(!pad.TakeReturnToMenu()); CHECK(!pad.MenuOpen());
+        sample.buttons = 0; consume(); CHECK(none_pressed());
+        sample.buttons = kButtonTouchPad | kButtonOptions; consume();
+        CHECK(pad.MenuOpen()); CHECK(!pad.TakeReturnToMenu()); CHECK(none_pressed());
+        sample.buttons = kButtonCross; consume(); // frame not yet presented
+        CHECK(pad.MenuOpen()); CHECK(!pad.TakeReturnToMenu());
+        Eden::SwitchMenu::MarkPresented(Eden::SwitchMenu::Generation());
+        sample.buttons = 0; consume();
+        sample.buttons = kButtonDown; consume();
+        CHECK(pad.MenuOpen()); CHECK(none_pressed());
+        Eden::SwitchMenu::MarkPresented(Eden::SwitchMenu::Generation());
+        sample.buttons = 0; consume();
+        sample.buttons = kButtonCross; consume(); // opens warning, never exits yet
+        CHECK(pad.MenuOpen()); CHECK(!pad.TakeReturnToMenu());
+        Eden::SwitchMenu::MarkPresented(Eden::SwitchMenu::Generation());
+        sample.buttons = kButtonCross; consume(); // held key cannot confirm
+        CHECK(!pad.TakeReturnToMenu());
+        sample.buttons = 0; consume();
+        sample.buttons = kButtonCircle; consume(); // cancel back to choices
+        CHECK(pad.MenuOpen()); CHECK(!pad.TakeReturnToMenu());
+        Eden::SwitchMenu::MarkPresented(Eden::SwitchMenu::Generation());
+        sample.buttons = 0; consume();
+        sample.buttons = kButtonDown; consume();
+        Eden::SwitchMenu::MarkPresented(Eden::SwitchMenu::Generation());
+        sample.buttons = 0; consume();
+        sample.buttons = kButtonCross; consume();
+        Eden::SwitchMenu::MarkPresented(Eden::SwitchMenu::Generation());
+        sample.buttons = 0; consume();
+        sample.buttons = kButtonCross; consume();
+        CHECK(pad.TakeReturnToMenu()); CHECK(!pad.MenuOpen());
         sample.buttons = 0; consume(); CHECK(none_pressed());
 
         // A button mapping (button_mapping.h): A on Cross and B on Circle, ZL on the touchpad
@@ -326,7 +357,8 @@ void CheckPad() {
         for (int i = 0; i < 30; ++i) consume();
         CHECK(none_pressed());
         sample.buttons = kButtonCreate; consume(); CHECK(pad.Engine().GetButton({}, 8));
-        sample.buttons = kButtonTouchPad | kButtonL1; consume(); CHECK(pad.TakeReturnToMenu());
+        sample.buttons = kButtonTouchPad | kButtonL1; consume();
+        CHECK(!pad.TakeReturnToMenu()); CHECK(!pad.MenuOpen());
         sample.buttons = 0; consume(); CHECK(none_pressed());
         // A mapping that names a button twice is not taken: the usual one stays.
         auto twice = Eden::kDefaultMapping;

@@ -2,6 +2,7 @@
 #pragma once
 #include <array>
 #include <atomic>
+#include "ps5_switch_safe_menu.hpp"
 #include <condition_variable>
 #include <memory>
 #include <mutex>
@@ -70,7 +71,9 @@ public:
     Pad& operator=(const Pad&) = delete;
     bool Open();
     bool Poll();
+    // True only after the player selected Return and confirmed the unsaved-progress warning.
     bool TakeReturnToMenu() { return return_to_menu.exchange(false); }
+    bool MenuOpen() const { return menu.captures_game_input(); }
     bool TakeHudToggle() { return hud_toggle.exchange(false); }
     // Players with a controller (bit per player), and those whose controller came or went.
     unsigned ConnectedPlayers() const { return connected_players.load(); }
@@ -104,6 +107,7 @@ private:
         bool select_held = false;  // a long press: its button stays down until the release
         unsigned touch_polls = 0;  // polls the touchpad has been down
         unsigned select_pulse = 0; // polls left of a tap's press
+        bool suppress_until_release = false; // menu keys must be released before guest input resumes
     };
     void Rescan();
     void OpenSlot(std::size_t player, int user);
@@ -115,6 +119,8 @@ private:
     std::array<Slot, kMaxPlayers> slots{};
     std::array<std::atomic<Grip>, kMaxPlayers> grips{};
     bool owns_user_service = false;
+    emuhub_switch_menu::State menu;
+    std::uint32_t menu_generation = 0;
     std::atomic<bool> return_to_menu = false;
     std::atomic<bool> hud_toggle = false;
     std::atomic<unsigned> connected_players = 0;

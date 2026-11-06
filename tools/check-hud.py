@@ -5,14 +5,14 @@ import subprocess
 import tempfile
 root = Path(__file__).resolve().parents[1]
 graphics = (root/'headless/graphics.cpp').read_text()
-draw_hud = graphics.split('    void DrawHud(', 1)[1].split('    unsigned presented_frames', 1)[0]
+draw_hud = graphics.split('    bool DrawHud(', 1)[1].split('    unsigned presented_frames', 1)[0]
 assert 'glReadPixels' not in draw_hud
 assert 'eglSwapBuffers' not in draw_hud
 present_loading = graphics.split('    void PresentLoading()', 1)[1].split('    bool LoadingTick(bool idle)', 1)[0]
 # The loading scene, or plain text when its shader does not build; then one swap.
 assert (present_loading.index('DrawLoading(') < present_loading.index('DrawHud(text, true)')
         < present_loading.index('eglSwapBuffers'))
-draw_loading = graphics.split('    bool DrawLoading(', 1)[1].split('    void DrawHud(', 1)[0]
+draw_loading = graphics.split('    bool DrawLoading(', 1)[1].split('    bool DrawHud(', 1)[0]
 assert 'eglSwapBuffers' not in draw_loading and 'loading_failed = true' in draw_loading
 assert 'vec4(0.025,0.04,0.075,0.5)' in graphics
 assert 'glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)' in graphics
