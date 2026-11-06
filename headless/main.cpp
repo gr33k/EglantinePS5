@@ -314,7 +314,7 @@ int main(int argc, char** argv) {
 #endif
         Eden::FilesystemAccessStatus() = static_cast<int>(elevation::request(
             elevation::Capability::filesystem, Eden::EmuHubProviderMode() ? nullptr : "/app0/lapy.elf"));
-        if (nested_emuhub && (!Eden::FilesystemAccess() || !emuhub_switch2::ready())) return 2;
+        if (nested_emuhub && (!Eden::FilesystemAccess() || !emuhub_switch2::ready(provider_rom))) return 2;
         Eden::BootTrace::Line("filesystem access returned status=%d, uid %d/%d gid %d/%d", Eden::FilesystemAccessStatus(),
                               static_cast<int>(getuid()), static_cast<int>(geteuid()), static_cast<int>(getgid()),
                               static_cast<int>(getegid()));
