@@ -84,7 +84,7 @@ inline bool regular_file(std::string_view path, std::uint64_t bytes) {
     if (fd < 0) return false;
     struct stat info{};
     const bool okay = ::fstat(fd, &info) == 0 && S_ISREG(info.st_mode) &&
-        info.st_nlink <= 1 && info.st_size >= 0 &&
+        info.st_size >= 0 &&
         static_cast<std::uint64_t>(info.st_size) == bytes;
     ::close(fd);
     return okay;
@@ -95,7 +95,7 @@ inline std::optional<std::string> read_small(std::string_view path,
     if (fd < 0) return std::nullopt;
     struct stat info{};
     const bool valid = ::fstat(fd, &info) == 0 && S_ISREG(info.st_mode) &&
-        info.st_nlink <= 1 && info.st_size > 0 &&
+        info.st_size > 0 &&
         static_cast<std::size_t>(info.st_size) <= maximum;
     std::string data(valid ? static_cast<std::size_t>(info.st_size) : 0, '\0');
     std::size_t done = 0;
