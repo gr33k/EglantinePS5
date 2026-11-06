@@ -5,6 +5,7 @@
 extern int sceKernelUsleep(uint32_t microseconds);
 extern int sceKernelDebugOutText(int channel, const char *text);
 extern int sceSystemServiceLoadExec(const char *path, const char **args);
+extern int eden_emuhub_provider_mode(void);
 // main returned: ask the system to end this title. The C library's exit() and _Exit() are not a
 // way out for a native title: the kernel answers them with signal 12, so the app "crashes", the
 // system writes a crash report and force-kills it (every development run ended that way, and three
@@ -26,6 +27,16 @@ __attribute__((noreturn)) void catchReturnFromMain(int status) {
 int eden_restart_app(void) {
     char marker[96];
     sceKernelDebugOutText(0, "EDEN_PPSA99121_RESTART\n");
+    if (eden_emuhub_provider_mode()) {
+        const char *paths[] = {"/app0/es-de/es-de.bin",
+            "/system_ex/app/PPSA91337/es-de/es-de.bin",
+            "/data/homebrew/PPSA91337/es-de/es-de.bin"};
+        for (unsigned i = 0; i < 3; ++i) {
+            const int result = sceSystemServiceLoadExec(paths[i], NULL);
+            if (result >= 0) return result;
+        }
+        return sceSystemServiceLoadExec("exit", NULL);
+    }
     const int refused = sceSystemServiceLoadExec("/app0/eboot.bin", NULL);
     snprintf(marker, sizeof(marker), "EDEN_PPSA99121_RESTART_REFUSED rc=%x\n", (unsigned)refused);
     sceKernelDebugOutText(0, marker);
