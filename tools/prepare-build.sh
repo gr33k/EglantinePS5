@@ -63,6 +63,16 @@ bash tools/build-common-dialog-stub.sh
 # driver built with another version of it is built again (only the changed file compiles).
 # So is a driver built from another Mesa revision than tools/deps.json pins.
 radv_release=../mihawk-vulkan-review/.deps/native/radv-release
+# A cached isolated RADV archive alone is insufficient: the NIR adapter compiles
+# against the matching Mesa source and generated headers. Rebuild when absent.
+radv_work=../mihawk-vulkan-review/.deps/work
+if [[ -f $radv_release/lib/libvulkan_radeon.ps5.a &&
+      ( ! -f $radv_work/radv-src/src/compiler/nir/nir.h ||
+        ! -f $radv_work/radv-build-ps5-release/src/compiler/nir/nir_builder_opcodes.h ) ]]; then
+    step "RADV: restoring missing pinned NIR source/build headers"
+    bash tools/build-radv-dependencies.sh
+    rm -f build/radv-isolated/libvulkan_radeon.ps5.a
+fi
 mesa_pin=$(python3 -c 'import json; print(next(i["commit"] for i in json.load(open("tools/deps.json"))["items"] if i["name"] == "ps5-mesa"))')
 if [[ -f $radv_release/lib/libvulkan_radeon.ps5.a ]]; then
     built=$(sed -n 's/^revision: //p' "$radv_release/PROVENANCE.txt" 2>/dev/null || true)
