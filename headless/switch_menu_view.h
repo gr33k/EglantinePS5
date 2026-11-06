@@ -50,7 +50,7 @@ inline std::string_view Line(std::uint64_t state, unsigned row) {
     case 0: return "EMUHUB  GAME CONTINUES";
     case 1: return returning ? "RESUME" : "RESUME  SELECTED";
     case 2: return returning ? "RETURN TO WHEEL  SELECTED" : "RETURN TO WHEEL";
-    case 3: return "CROSS  SELECT       CIRCLE  RESUME";
+    case 3: return "CROSS SELECT  CIRCLE RESUME";
     default: return {};
     }
 }

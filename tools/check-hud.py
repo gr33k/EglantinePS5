@@ -51,6 +51,17 @@ int main() {
     for (int i = 0; i < 5; ++i) assert(!slow.Ready(i));
     assert(slow.Ready(5)); // Slow rendering must not remain hidden forever.
     assert(Eden::HudGlyph(' ') == 0 && Eden::HudGlyph('F') != 0 && Eden::HudGlyph('W') != 0);
+    for (const auto page : {emuhub_switch_menu::Page::choices,
+                            emuhub_switch_menu::Page::confirm_return}) {
+        const auto generation = Eden::SwitchMenu::Publish(page,
+            emuhub_switch_menu::Choice::return_to_emuhub);
+        assert(generation != 0);
+        for (unsigned row = 0; row < Eden::SwitchMenu::kRows; ++row) {
+            const auto line = Eden::SwitchMenu::Line(Eden::SwitchMenu::view.load(), row);
+            assert(line.size() <= 28);
+            for (const char c : line) assert(c == ' ' || Eden::HudGlyph(c) != 0);
+        }
+    }
     auto text = Eden::HudText("FPS 12.3");
     assert(text[0] == Eden::HudGlyph('F') && text[8] == 0);
     assert(Eden::HudText("01234567890123456789")[15] == Eden::HudGlyph('5'));
