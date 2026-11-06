@@ -76,18 +76,18 @@ inline uint32_t HudGlyph(char c) {
     case 'G': return 0x796f;
     case 'V': return 0x5b6a;
     case 'K': return 0x5bad;
-    // Keep the upstream FPS glyphs and add the EmuHub menu alphabet.
+    // Keep upstream W/C and fit the EmuHub menu E/X glyphs.
     case 'W': return 0x5bfd;
     case 'M': return 0x5fed;
     case 'C': return 0x7927;
     case 'B': return 0x6bae;
-    case 'E': return 0x792f;
+    case 'E': return 0x79a7;
     case 'H': return 0x5bed;
     case 'R': return 0x6bad;
     case 'T': return 0x7492;
     case 'U': return 0x5b6f;
     case 'Y': return 0x5a92;
-    case 'X': return 0x5a8b;
+    case 'X': return 0x5aad;
     case '.': return 0x0002;
     case '-': return 0x01c0;
     default: return 0;
