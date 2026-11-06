@@ -40,6 +40,12 @@ int main(int argc, char** argv) {
     assert(consumed && consumed->edition && consumed->key_hash == 0x5678);
     assert(!fs::exists(path));
     assert(!consume(path.c_str()));
+    const auto receipt = scratch / "edition-ready.txt";
+    { std::ofstream out(receipt);
+      out << "EMUHUB-SWITCH2-EDITION-READY-1\n" << kEditionRootSha << "\n"
+          << kEditionManifest << "\n"; }
+    assert(edition_receipt_at(receipt.string()));
+    assert(!edition_receipt_ready());
     assert(!edition_ready());
-    std::cout << "PASS legacy base ticket unchanged; exact edition ticket accepted; tamper and missing receipt rejected; one-use consume\n";
+    std::cout << "PASS legacy base ticket unchanged; Edition receipt accepted before USB access; exact ticket/tamper/missing receipt/one-use\n";
 }

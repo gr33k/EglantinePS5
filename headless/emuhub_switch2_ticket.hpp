@@ -114,18 +114,13 @@ inline bool receipt_ready() {
         std::string_view(bytes, static_cast<std::size_t>(count)) == kReadyBody;
 }
 inline bool ready() { return ready_at(kBoot, kReady); }
-inline bool edition_ready() {
-    if (!edition_manifest_pinned() || !regular_file(kEditionBoot, 29043641)) return false;
-    const int dir = ::open(kEditionAoc.data(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-    if (dir < 0) return false;
-    struct stat info{};
-    const bool directory = ::fstat(dir, &info) == 0 && S_ISDIR(info.st_mode);
-    ::close(dir);
-    if (!directory) return false;
+inline bool edition_receipt_at(std::string_view receipt) {
+    if (!edition_manifest_pinned()) return false;
     const std::string expected = "EMUHUB-SWITCH2-EDITION-READY-1\n" +
         std::string(kEditionRootSha) + "\n" + std::string(kEditionManifest) + "\n";
-    const int fd = ::open(kEditionReady.data(), O_RDONLY | O_NOFOLLOW);
+    const int fd = ::open(std::string(receipt).c_str(), O_RDONLY | O_NOFOLLOW);
     if (fd < 0) return false;
+    struct stat info{};
     char bytes[256]{};
     const bool bounded = ::fstat(fd, &info) == 0 && S_ISREG(info.st_mode) &&
                          info.st_size == static_cast<off_t>(expected.size());
@@ -133,6 +128,16 @@ inline bool edition_ready() {
     const bool closed = ::close(fd) == 0;
     return bounded && closed && count == info.st_size &&
            std::string_view(bytes, static_cast<std::size_t>(count)) == expected;
+}
+inline bool edition_receipt_ready() { return edition_receipt_at(kEditionReady); }
+inline bool edition_ready() {
+    if (!edition_receipt_ready() || !regular_file(kEditionBoot, 29043641)) return false;
+    const int dir = ::open(kEditionAoc.data(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (dir < 0) return false;
+    struct stat info{};
+    const bool directory = ::fstat(dir, &info) == 0 && S_ISDIR(info.st_mode);
+    ::close(dir);
+    return directory;
 }
 inline std::optional<Ticket> consume(const char* path) {
     const int fd = ::open(path, O_RDONLY | O_NOFOLLOW);
