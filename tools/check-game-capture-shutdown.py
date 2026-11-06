@@ -12,7 +12,7 @@ renderer = eglantine_source('src/video_core/renderer_opengl/renderer_opengl.cpp'
 assert 'm_current_frame != 29' not in renderer
 assert 'EDEN_GAME_CAPTURE_TARGET' not in renderer
 assert 'EDEN_GAME_PRESENT_FRAME' not in renderer
-draw_hud = graphics.split('    void DrawHud(', 1)[1].split('    unsigned presented_frames', 1)[0]
+draw_hud = graphics.split('    bool DrawHud(', 1)[1].split('    unsigned presented_frames', 1)[0]
 assert 'glReadPixels' not in draw_hud
 assert 'game-hud.ppm' not in graphics and 'loading.ppm' not in graphics
 
