@@ -15,6 +15,7 @@
 #include <exception>
 #include "assets_dir.h"
 #include "forwarded_launch.h"
+#include "emuhub_switch2_ticket.hpp"
 #include "gpu_failure.h"
 #include "guest_fault.h"
 #include "jit_list.h"
@@ -83,6 +84,7 @@ extern "C" std::size_t eden_fastmem64_save_sites(const char*, unsigned long long
 #include "eglantineps5/version.h"
 extern "C" void ps5_opengl_heap_snapshot(const char*, unsigned);
 extern "C" std::int64_t sceKernelGetDirectMemorySize();
+extern "C" int sceSystemServiceLoadExec(const char*, const char* const*);
 #else
 #include <malloc.h>
 #include "mock_devices.h"
@@ -194,6 +196,7 @@ static void MigrateSandboxData() {
 // it is a rename of each folder. Nothing moves unless all of it can: a folder chosen in Settings,
 // or anything already in /data/eglantineps5, leaves everything where it is.
 static void MoveGameFilesOutOfTheApp() {
+    if (Eden::EmuHubProviderMode()) return;
     const std::string from = std::string{Eden::kInstallDir} + "/assets", to = Eden::kDefaultAssetsDir;
     const std::string saved = Eden::LoadSavedAssetsDir();
     if ((!saved.empty() && saved != from) || !Eden::FileExists(from + "/keys/prod.keys") ||
@@ -265,7 +268,37 @@ static void UpdateGrips(Core::System& system, Eden::Pad& pad) {
 void EdenRegisterNirBackend(); // nir_backend.cpp
 #endif
 
+#ifdef PS5_NATIVE
+static void ReturnToEmuHubFrontend() {
+    for (const char* path : {"/app0/es-de/es-de.bin",
+            "/system_ex/app/PPSA91337/es-de/es-de.bin",
+            "/data/homebrew/PPSA91337/es-de/es-de.bin",
+            "/mnt/sandbox/PPSA91337_000/app0/es-de/es-de.bin"}) {
+        if (!Eden::FileExists(path)) continue;
+        const int result = sceSystemServiceLoadExec(path, nullptr);
+        if (result >= 0) {
+            std::this_thread::sleep_for(std::chrono::seconds(10));
+            return;
+        }
+    }
+}
+#endif
+
+extern "C" int eden_emuhub_provider_mode() { return Eden::EmuHubProviderMode() ? 1 : 0; }
+
 int main(int argc, char** argv) {
+#ifdef PS5_NATIVE
+    const bool nested_emuhub = Eden::FileExists("/app0/es-de/es-de.bin") &&
+        Eden::FileExists("/app0/providers/switch2/eboot.bin");
+    SCOPE_EXIT { if (nested_emuhub) ReturnToEmuHubFrontend(); };
+    std::string provider_rom;
+    if (nested_emuhub) {
+        Eden::EmuHubProviderMode() = true;
+        const auto ticket = emuhub_switch2::consume(emuhub_switch2::kRequest.data());
+        if (!ticket) return 2;
+        provider_rom = ticket->boot;
+    }
+#endif
     try {
 #ifdef EDEN_PS5_RADV
         // Compute shaders reach RADV as NIR where translatable (nir_handoff.h; EDEN_NX2_NIR=0: SPIR-V).
@@ -290,7 +323,9 @@ int main(int argc, char** argv) {
         if (access("/app0/no-filesystem-access.txt", F_OK) == 0) Eden::FilesystemAccessStatus() = 99;
         else
 #endif
-        Eden::FilesystemAccessStatus() = static_cast<int>(elevation::request(elevation::Capability::filesystem));
+        Eden::FilesystemAccessStatus() = static_cast<int>(elevation::request(
+            elevation::Capability::filesystem, Eden::EmuHubProviderMode() ? nullptr : "/app0/lapy.elf"));
+        if (nested_emuhub && (!Eden::FilesystemAccess() || !emuhub_switch2::ready())) return 2;
         Eden::BootTrace::Line("filesystem access returned status=%d, uid %d/%d gid %d/%d", Eden::FilesystemAccessStatus(),
                               static_cast<int>(getuid()), static_cast<int>(geteuid()), static_cast<int>(getgid()),
                               static_cast<int>(getegid()));
@@ -305,7 +340,7 @@ int main(int argc, char** argv) {
         // root, which may set its group.
         if (getegid() != getgid() && setegid(getgid()) != 0)
             Eden::Report("filesystem access", "Could not match the effective group; RADV's disk cache stays off");
-        if (Eden::FilesystemAccess()) {
+        if (Eden::FilesystemAccess() && !Eden::EmuHubProviderMode()) {
             MigrateSandboxData();
             MoveGameFilesOutOfTheApp();
         }
@@ -463,7 +498,13 @@ int main(int argc, char** argv) {
         std::string launch_error;
         // The previous run crashed: the launcher says where its report is.
         if (!last_crash.report.empty()) launch_error = std::string{Eden::Crash::kNotice} + last_crash.report;
-        const Eden::ForwardedArgs forwarded = Eden::ParseForwardedArgs(argc, argv);
+        Eden::ForwardedArgs forwarded = Eden::ParseForwardedArgs(argc, argv);
+#ifdef PS5_NATIVE
+        if (nested_emuhub) {
+            forwarded.rom = provider_rom;
+            forwarded.exit_after_game = true;
+        }
+#endif
         std::string forwarded_game;
         bool forwarded_session = false;
         if (!forwarded.rom.empty() && last_crash.report.empty()) {
@@ -471,6 +512,9 @@ int main(int argc, char** argv) {
             if (const auto main = Eden::ExtractedGameMain(path); !main.empty()) path = main;
             if (!path.empty() && Eden::FileExists(path)) forwarded_game = path;
             else launch_error = "Forwarded game not found: " + (path.empty() ? forwarded.rom : path);
+#ifdef PS5_NATIVE
+            if (nested_emuhub && forwarded_game.empty()) return 2;
+#endif
             Eden::BootTrace::Line("forwarded game: %s", forwarded_game.empty() ? "not found" : "found");
         }
 #ifdef MKW_DIAGNOSTIC_INPUT
@@ -627,6 +671,9 @@ int main(int argc, char** argv) {
             Eden::Report("exit", "Forwarded game ended");
             return 0;
         } else {
+#ifdef PS5_NATIVE
+        if (nested_emuhub) return 2; // Never expose the standalone library in provider mode.
+#endif
         guest_fault_retries = 0;
         forwarded_session = false;
 #if defined(EDEN_DEV_PROFILE) || defined(EDEN_DEV_ROM_ID)

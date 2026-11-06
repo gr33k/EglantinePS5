@@ -99,7 +99,8 @@ extern "C"
             }
             return 10;
         }
-        if (test::starts_with(path, "/download0/.elevate_proc."))
+        if (test::starts_with(path, "/download0/.elevate_proc.") ||
+            test::starts_with(path, "/download0/.emuhub_jailbreak."))
         {
             if (test::state.request_open_fails)
             {
@@ -305,8 +306,15 @@ int main()
 
     test::reset();
     test::state.data_open_failures = 1;
+    assert(elevation::request(Capability::filesystem, nullptr) == Status::ok);
+    assert(test::state.request == "{\"PID\":\"4242\"}\n");
+    assert(test::state.socket_calls == 0);
+
+    test::reset();
+    test::state.data_open_failures = 1;
     test::state.result_open_fails = true;
-    assert(elevation::request(Capability::filesystem, nullptr) == Status::invalid_request);
+    assert(elevation::request(Capability::filesystem, nullptr) == Status::unavailable);
+    assert(test::state.socket_calls == 0);
 
     elevation::wire::Message request{};
     request.pid = 4242;
