@@ -538,6 +538,7 @@ HudSnapshot GetVulkanMenuLine(std::uint64_t state, unsigned row) {
 bool LoadingTick(VideoCore::RendererBase& renderer, bool idle) {
 #ifdef EDEN_PS5_VULKAN
     if (vulkan_loading || SwitchMenu::Open()) {
+        if (SwitchMenu::Open()) SwitchMenu::menu_ticks.fetch_add(1, std::memory_order_relaxed);
         const double now = std::chrono::duration<double>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
         const bool first = vulkan_loading_start < 0;
@@ -550,6 +551,7 @@ bool LoadingTick(VideoCore::RendererBase& renderer, bool idle) {
             // Send the present through the ring so it runs in order with the guest's work.
             if (auto& split = VideoCommon::GpuSplit::Get();
                 split.Active() && !VideoCommon::GpuSplit::IsBackThread()) {
+                if (SwitchMenu::Open()) SwitchMenu::menu_queued.fetch_add(1, std::memory_order_relaxed);
                 split.DeferFunction([&renderer] {
                     if (vulkan_loading.load(std::memory_order_relaxed) || SwitchMenu::Open())
                         PresentVulkanLoading(renderer);

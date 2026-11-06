@@ -12,6 +12,12 @@ using emuhub_switch_menu::Choice;
 // One writer (the controller poller), one or more renderer readers.
 inline std::atomic<std::uint64_t> view{0};
 inline std::atomic<std::uint32_t> presented{0};
+// Diagnostic counters only. The input worker reads these without acquiring GPU locks.
+inline std::atomic<std::uint64_t> menu_ticks{0};
+inline std::atomic<std::uint64_t> menu_queued{0};
+inline std::atomic<std::uint64_t> presenter_entered{0};
+inline std::atomic<std::uint64_t> present_returned{0};
+inline std::atomic<std::uint64_t> full_draws{0};
 inline std::uint32_t generation = 0;
 inline std::uint32_t Publish(Page page, Choice choice) {
     const auto next = ++generation;
@@ -32,8 +38,9 @@ inline bool Visible(std::uint32_t wanted) {
     return wanted != 0 && presented.load(std::memory_order_acquire) == wanted;
 }
 inline void MarkPresented(std::uint32_t drawn) {
-    if (drawn != 0 && Generation() == drawn)
+    if (drawn != 0 && Generation() == drawn) {
         presented.store(drawn, std::memory_order_release);
+    }
 }
 inline std::string_view Line(std::uint64_t state, unsigned row) {
     if (static_cast<Page>(state & 0xffu) == Page::confirm_return) {
@@ -114,7 +121,7 @@ inline void RecordFullDraw(std::uint64_t ticket, std::uint32_t generation) {
     const std::scoped_lock lock(draw_receipt_mutex);
     if (Generation() == generation && pending_presentation.id == ticket &&
         pending_presentation.generation == generation)
-        full_draw_ticket = ticket;
+        { full_draw_ticket = ticket; full_draws.fetch_add(1, std::memory_order_relaxed); }
 }
 inline bool FullyDrawn(std::uint64_t ticket, std::uint32_t generation) {
     const std::scoped_lock lock(draw_receipt_mutex);

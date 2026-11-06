@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "devices.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <numbers>
 #include <stdexcept>
@@ -266,6 +267,21 @@ bool Pad::Poll() {
         Consume(player, {samples.data(), static_cast<std::size_t>(count)});
         primary |= player == 0;
     }
+    // The controller can return zero samples while the guest or renderer stalls.
+    // Report a bounded heartbeat on the independent poll worker regardless.
+    static auto last_menu_heartbeat = std::chrono::steady_clock::time_point{};
+    const auto heartbeat_now = std::chrono::steady_clock::now();
+    if (menu.captures_game_input() && heartbeat_now - last_menu_heartbeat >= std::chrono::seconds(2)) {
+        last_menu_heartbeat = heartbeat_now;
+        LOG_INFO(Input, "EDEN_MENU_HEARTBEAT gen={} shown={} ticks={} queued={} entered={} draws={} returned={} polls={} samples={} last_read={}",
+            menu_generation, SwitchMenu::presented.load(std::memory_order_acquire),
+            SwitchMenu::menu_ticks.load(std::memory_order_relaxed),
+            SwitchMenu::menu_queued.load(std::memory_order_relaxed),
+            SwitchMenu::presenter_entered.load(std::memory_order_relaxed),
+            SwitchMenu::full_draws.load(std::memory_order_relaxed),
+            SwitchMenu::present_returned.load(std::memory_order_relaxed),
+            polls, samples_read, last_result);
+    }
     return primary;
 }
 void Pad::Consume(std::size_t player, std::span<const ps5::pad::Data> samples) {
@@ -347,6 +363,19 @@ void Pad::Consume(std::size_t player, std::span<const ps5::pad::Data> samples) {
             const auto action = menu.consume(controls, SwitchMenu::Visible(menu_generation));
             if (menu.page() != old_page || menu.choice() != old_choice)
                 menu_generation = SwitchMenu::Publish(menu.page(), menu.choice());
+            // Input-side breadcrumb on state changes. GPU counters are lock-free.
+            if (menu.page() != old_page || menu.choice() != old_choice) {
+                LOG_INFO(Input, "EDEN_MENU_DIAG page={} choice={} action={} gen={} shown={} ticks={} queued={} entered={} draws={} returned={} polls={} samples={} last_read={}",
+                    static_cast<unsigned>(menu.page()), static_cast<unsigned>(menu.choice()),
+                    static_cast<unsigned>(action), menu_generation,
+                    SwitchMenu::presented.load(std::memory_order_acquire),
+                    SwitchMenu::menu_ticks.load(std::memory_order_relaxed),
+                    SwitchMenu::menu_queued.load(std::memory_order_relaxed),
+                    SwitchMenu::presenter_entered.load(std::memory_order_relaxed),
+                    SwitchMenu::full_draws.load(std::memory_order_relaxed),
+                    SwitchMenu::present_returned.load(std::memory_order_relaxed),
+                    polls, samples_read, last_result);
+            }
             if (action == Action::exit_confirmed) return_to_menu = true;
             if (action == Action::opened)
                 for (auto& player_slot : slots) player_slot.suppress_until_release = true;

@@ -5,6 +5,7 @@ void RendererVulkan::PresentLoading() {
     const auto menu_generation =
         static_cast<Eden::SwitchMenu::Page>(menu_state & 0xffu) == Eden::SwitchMenu::Page::closed
             ? 0u : static_cast<std::uint32_t>(menu_state >> 32);
+    if (menu_generation) Eden::SwitchMenu::presenter_entered.fetch_add(1, std::memory_order_relaxed);
     Frame* frame = present_manager.GetRenderFrame();
     const auto menu_ticket = Eden::SwitchMenu::BeginPresentation(frame, menu_generation);
     scheduler.RequestOutsideRenderPassOperationContext();
@@ -13,6 +14,7 @@ void RendererVulkan::PresentLoading() {
                               swapchain.GetImageViewFormat(), true);
     scheduler.Flush(*frame->render_ready);
     present_manager.Present(frame);
+    if (menu_generation) Eden::SwitchMenu::present_returned.fetch_add(1, std::memory_order_relaxed);
     if (Eden::SwitchMenu::FullyDrawn(menu_ticket, menu_generation))
         Eden::SwitchMenu::MarkPresented(menu_generation);
     Eden::SwitchMenu::EndPresentation(menu_ticket);
