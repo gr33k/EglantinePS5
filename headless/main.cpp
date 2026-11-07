@@ -277,6 +277,8 @@ static void ReturnToEmuHubFrontend() {
 
 extern "C" int eden_emuhub_provider_mode() { return Eden::EmuHubProviderMode() ? 1 : 0; }
 
+int run_signed_job(const char* request_path);
+
 int main(int argc, char** argv) {
     bool wonder_edition_route = false;
     std::optional<emuhub_generic::Route> generic_route;
@@ -325,6 +327,12 @@ int main(int argc, char** argv) {
         if (generic_pending) {
             generic_route = emuhub_generic::consume();
             if (!generic_route) {
+                constexpr const char* kJobRequest =
+                    "/data/homebrew/PPSA91337/config/ns2-prepare/request.txt";
+                if (access(kJobRequest, F_OK) == 0) {
+                    Eden::Report("loader", "Starting signed Switch 2 NUP preparation");
+                    return run_signed_job(kJobRequest);
+                }
                 Eden::Report("loader", "Generic Switch 2 launch ticket/ready receipt unavailable");
                 return 2;
             }
