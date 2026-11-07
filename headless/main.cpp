@@ -17,6 +17,7 @@
 #include "assets_dir.h"
 #include "forwarded_launch.h"
 #include "emuhub_switch2_ticket.hpp"
+#include "generic_provider_ticket.hpp"
 #include "gpu_failure.h"
 #include "guest_fault.h"
 #include "jit_list.h"
@@ -278,7 +279,9 @@ extern "C" int eden_emuhub_provider_mode() { return Eden::EmuHubProviderMode() ?
 
 int main(int argc, char** argv) {
     bool wonder_edition_route = false;
+    std::optional<emuhub_generic::Route> generic_route;
 #ifdef PS5_NATIVE
+    bool generic_pending = false;
     const bool nested_emuhub = Eden::FileExists("/app0/es-de/es-de.bin") &&
         Eden::FileExists("/app0/providers/switch2/eboot.bin");
     SCOPE_EXIT { if (nested_emuhub) ReturnToEmuHubFrontend(); };
@@ -286,9 +289,10 @@ int main(int argc, char** argv) {
     if (nested_emuhub) {
         Eden::EmuHubProviderMode() = true;
         const auto ticket = emuhub_switch2::consume(emuhub_switch2::kRequest.data());
-        if (!ticket) return 2;
-        provider_rom = ticket->boot;
-        wonder_edition_route = ticket->edition;
+        if (ticket) {
+            provider_rom = ticket->boot;
+            wonder_edition_route = ticket->edition;
+        } else generic_pending = true;
     }
 #endif
     try {
@@ -317,8 +321,16 @@ int main(int argc, char** argv) {
 #endif
         Eden::FilesystemAccessStatus() = static_cast<int>(elevation::request(
             elevation::Capability::filesystem, Eden::EmuHubProviderMode() ? nullptr : "/app0/lapy.elf"));
-        if (nested_emuhub && (!Eden::FilesystemAccess() ||
-            !(wonder_edition_route ? emuhub_switch2::edition_ready() : emuhub_switch2::ready()))) return 2;
+        if (nested_emuhub && !Eden::FilesystemAccess()) return 2;
+        if (generic_pending) {
+            generic_route = emuhub_generic::consume();
+            if (!generic_route) {
+                Eden::Report("loader", "Generic Switch 2 launch ticket/ready receipt unavailable");
+                return 2;
+            }
+            provider_rom = generic_route->boot;
+        } else if (nested_emuhub &&
+            !(wonder_edition_route ? emuhub_switch2::edition_ready() : emuhub_switch2::ready())) return 2;
         Eden::BootTrace::Line("filesystem access returned status=%d, uid %d/%d gid %d/%d", Eden::FilesystemAccessStatus(),
                               static_cast<int>(getuid()), static_cast<int>(geteuid()), static_cast<int>(getgid()),
                               static_cast<int>(getegid()));
@@ -1435,7 +1447,7 @@ int main(int argc, char** argv) {
                 // Update and DLC files (NSP or XCI) in the game files' updates folder apply to their
                 // base game: Eden's ExternalContentProvider, which the patch manager checks first.
 #ifdef PS5_NATIVE
-                if (wonder_edition_route) Settings::values.external_content_dirs.clear();
+                if (wonder_edition_route || generic_route) Settings::values.external_content_dirs.clear();
                 else Settings::values.external_content_dirs = {Eden::AssetsPath("updates")};
 #else
                 Settings::values.external_content_dirs = {Eden::AssetsPath("updates")};
@@ -1447,7 +1459,23 @@ int main(int argc, char** argv) {
                 // code, which then ran against the old data. It also gives Eden the game's control data.
                 game_contents.ClearAllEntries();
 #ifdef PS5_NATIVE
-                if (wonder_edition_route) {
+                if (generic_route) {
+                    const auto program_dir = system.GetFilesystem()->OpenDirectory(
+                        generic_route->romfs, FileSys::OpenMode::Read);
+                    if (!program_dir) return 2;
+                    auto program_romfs = FileSys::CreateRomFS(program_dir);
+                    if (!program_romfs) return 2;
+                    game_contents.AddLooseProgramLayer(generic_route->program,
+                        generic_route->version, std::move(program_romfs));
+                    for (const auto& [id, path] : generic_route->aoc) {
+                        const auto dir = system.GetFilesystem()->OpenDirectory(path,
+                            FileSys::OpenMode::Read);
+                        if (!dir) return 2;
+                        auto romfs = FileSys::CreateRomFS(dir);
+                        if (!romfs) return 2;
+                        game_contents.AddLooseAoc(id, std::move(romfs));
+                    }
+                } else if (wonder_edition_route) {
                     // Register a verified merged program RomFS by title/version. AOC stays
                     // separate and is never advertised without its own storage.
                     const auto program_dir = system.GetFilesystem()->OpenDirectory(
@@ -1474,7 +1502,7 @@ int main(int argc, char** argv) {
                     game_contents.AddLooseAoc(emuhub_switch2::kEditionAocId, std::move(aoc_romfs));
                 }
 #endif
-                if (game && guest && !wonder_edition_route &&
+                if (game && guest && !wonder_edition_route && !generic_route &&
                     !game_contents.AddEntriesFromContainer(
                         system.GetFilesystem()->OpenFile(guest, FileSys::OpenMode::Read)))
                     Eden::Report("loader", "Game contents not registered; an update's data will not apply");

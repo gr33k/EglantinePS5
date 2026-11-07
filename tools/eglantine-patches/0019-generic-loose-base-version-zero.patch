@@ -1,0 +1,6 @@
+--- a/src/core/file_sys/registered_cache.cpp
++++ b/src/core/file_sys/registered_cache.cpp
+@@ -1360,2 +1360,2 @@
+-    if (update_version && merged_romfs)
++    if (merged_romfs)
+         loose_program_romfs.insert_or_assign(title_id, std::make_pair(update_version, std::move(merged_romfs)));
