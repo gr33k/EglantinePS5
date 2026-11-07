@@ -6,11 +6,44 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <string_view>
 
 namespace Eden {
+// Counts only guest Composite calls, excluding loading and menu-only presents.
+// This is a cheap witness for a white scene; it never reads pixels or guest data.
+namespace CompositionProbe {
+struct Snapshot {
+    std::uint64_t frames, empty, invalid, multi;
+    std::uint32_t last_layers, width, height, stride;
+};
+inline std::atomic<std::uint64_t> frames{0}, empty{0}, invalid{0}, multi{0};
+inline std::atomic<std::uint32_t> last_layers{0}, width{0}, height{0}, stride{0};
+inline void Observe(std::size_t count, bool address_valid, std::uint32_t w,
+                    std::uint32_t h, std::uint32_t pitch) {
+    frames.fetch_add(1, std::memory_order_relaxed);
+    if (count == 0) empty.fetch_add(1, std::memory_order_relaxed);
+    if (count > 1) multi.fetch_add(1, std::memory_order_relaxed);
+    if (count && (!address_valid || !w || !h || !pitch))
+        invalid.fetch_add(1, std::memory_order_relaxed);
+    last_layers.store(static_cast<std::uint32_t>(count), std::memory_order_relaxed);
+    width.store(w, std::memory_order_relaxed);
+    height.store(h, std::memory_order_relaxed);
+    stride.store(pitch, std::memory_order_relaxed);
+}
+inline Snapshot Drain() {
+    return {frames.exchange(0, std::memory_order_relaxed),
+            empty.exchange(0, std::memory_order_relaxed),
+            invalid.exchange(0, std::memory_order_relaxed),
+            multi.exchange(0, std::memory_order_relaxed),
+            last_layers.load(std::memory_order_relaxed),
+            width.load(std::memory_order_relaxed),
+            height.load(std::memory_order_relaxed),
+            stride.load(std::memory_order_relaxed)};
+}
+} // namespace CompositionProbe
 // Counts contiguous presentation intervals; loading gaps are never reported as FPS.
 struct HudClock {
     double start{-1}, last{-1}, fps{-1}, worst_ms{}, window_worst_ms{};

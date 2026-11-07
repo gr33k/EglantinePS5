@@ -850,6 +850,11 @@ adapt('src/video_core/renderer_vulkan/renderer_vulkan.cpp', 'vulkan_renderer.cpp
     # than the output shows keeps its pace instead of waiting for a refresh per frame
     # (headless/display_refresh.h). The frame still ends as any other.
     ('    RenderScreenshot(framebuffers);\n    Frame* frame = present_manager.GetRenderFrame();',
+     '    Eden::CompositionProbe::Observe(framebuffers.size(),\n'
+     '        !framebuffers.empty() && framebuffers.front().address != 0,\n'
+     '        framebuffers.empty() ? 0 : framebuffers.front().width,\n'
+     '        framebuffers.empty() ? 0 : framebuffers.front().height,\n'
+     '        framebuffers.empty() ? 0 : framebuffers.front().stride);\n'
      '    RenderScreenshot(framebuffers);\n'
      '    if (::Eden::Display::SkipFrame()) {\n'
      '        gpu.RendererFrameEndNotify();\n'

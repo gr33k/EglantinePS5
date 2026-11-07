@@ -730,6 +730,13 @@ void GraphicsWindow::OnFrameDisplayed() {
                             interval_hist[1], interval_hist[2], interval_hist[3], interval_hist[4]);
                 interval_hist = {};
 #endif
+                const auto composition = Eden::CompositionProbe::Drain();
+                std::printf("EDEN_GUEST_COMPOSITION frames=%llu empty=%llu invalid=%llu multi=%llu last_layers=%u first=%ux%u stride=%u\n",
+                    static_cast<unsigned long long>(composition.frames),
+                    static_cast<unsigned long long>(composition.empty),
+                    static_cast<unsigned long long>(composition.invalid),
+                    static_cast<unsigned long long>(composition.multi), composition.last_layers,
+                    composition.width, composition.height, composition.stride);
                 Eden::Performance::ReportVulkan();
                 Eden::Performance::ReportGuestRun();
 #ifdef EDEN_DEV_PROFILE
