@@ -278,6 +278,7 @@ extern "C" int eden_emuhub_provider_mode() { return Eden::EmuHubProviderMode() ?
 
 int main(int argc, char** argv) {
     bool wonder_edition_route = false;
+    bool ocarina_update_route = false;
 #ifdef PS5_NATIVE
     const bool nested_emuhub = Eden::FileExists("/app0/es-de/es-de.bin") &&
         Eden::FileExists("/app0/providers/switch2/eboot.bin");
@@ -289,6 +290,7 @@ int main(int argc, char** argv) {
         if (!ticket) return 2;
         provider_rom = ticket->boot;
         wonder_edition_route = ticket->edition;
+        ocarina_update_route = ticket->ocarina_update;
     }
 #endif
     try {
@@ -318,7 +320,8 @@ int main(int argc, char** argv) {
         Eden::FilesystemAccessStatus() = static_cast<int>(elevation::request(
             elevation::Capability::filesystem, Eden::EmuHubProviderMode() ? nullptr : "/app0/lapy.elf"));
         if (nested_emuhub && (!Eden::FilesystemAccess() ||
-            !(wonder_edition_route ? emuhub_switch2::edition_ready() : emuhub_switch2::ready()))) return 2;
+            !(wonder_edition_route ? emuhub_switch2::edition_ready() :
+              ocarina_update_route ? emuhub_switch2::ocarina_ready() : emuhub_switch2::ready()))) return 2;
         Eden::BootTrace::Line("filesystem access returned status=%d, uid %d/%d gid %d/%d", Eden::FilesystemAccessStatus(),
                               static_cast<int>(getuid()), static_cast<int>(geteuid()), static_cast<int>(getgid()),
                               static_cast<int>(getegid()));
@@ -1435,7 +1438,7 @@ int main(int argc, char** argv) {
                 // Update and DLC files (NSP or XCI) in the game files' updates folder apply to their
                 // base game: Eden's ExternalContentProvider, which the patch manager checks first.
 #ifdef PS5_NATIVE
-                if (wonder_edition_route) Settings::values.external_content_dirs.clear();
+                if (wonder_edition_route || ocarina_update_route) Settings::values.external_content_dirs.clear();
                 else Settings::values.external_content_dirs = {Eden::AssetsPath("updates")};
 #else
                 Settings::values.external_content_dirs = {Eden::AssetsPath("updates")};
@@ -1473,8 +1476,20 @@ int main(int argc, char** argv) {
                     }
                     game_contents.AddLooseAoc(emuhub_switch2::kEditionAocId, std::move(aoc_romfs));
                 }
+                if (ocarina_update_route) {
+                    const auto program_dir = system.GetFilesystem()->OpenDirectory(
+                        emuhub_switch2::kOcarinaRomFS, FileSys::OpenMode::Read);
+                    if (!program_dir) {
+                        Eden::Report("loader", "Ocarina merged RomFS unavailable");
+                        return 2;
+                    }
+                    auto program_romfs = FileSys::CreateRomFS(program_dir);
+                    if (!program_romfs) return 2;
+                    game_contents.AddLooseProgramLayer(emuhub_switch2::kOcarinaBaseId,
+                        emuhub_switch2::kOcarinaUpdateVersion, std::move(program_romfs));
+                }
 #endif
-                if (game && guest && !wonder_edition_route &&
+                if (game && guest && !wonder_edition_route && !ocarina_update_route &&
                     !game_contents.AddEntriesFromContainer(
                         system.GetFilesystem()->OpenFile(guest, FileSys::OpenMode::Read)))
                     Eden::Report("loader", "Game contents not registered; an update's data will not apply");

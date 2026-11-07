@@ -36,11 +36,30 @@ inline constexpr std::uint64_t kEditionBaseId = 0x010015100B514000ULL;
 inline constexpr std::uint32_t kEditionUpdateVersion = 327680;
 inline constexpr std::uint64_t kEditionAocId = 0x010015100B515001ULL;
 
+inline constexpr std::string_view kOcarinaKey = "Ocarina-0400486024DEC000-update-131072.dir";
+inline constexpr std::string_view kOcarinaSource = "ns2:0400486024DEC000:update:131072:pkg:0400486024DEC800";
+inline constexpr std::string_view kOcarinaBoot = "/mnt/usb0/eglantineps5/roms/Ocarina-0400486024DEC000-update-131072/exefs/main";
+inline constexpr std::string_view kOcarinaRomFS = "/mnt/usb0/eglantineps5/roms/Ocarina-0400486024DEC000-update-131072/romfs";
+inline constexpr std::string_view kOcarinaReady = "/app0/config/switch2-ocarina-update-verified.txt";
+inline constexpr std::string_view kOcarinaRootSha = "85b08e81a2a08612f88de1063c8581fe088f7554303aa1ff207972d729b5916f";
+inline constexpr std::string_view kOcarinaTocSha = "0cb62756768999d3f0eab2690d75a262521d4a5c3bebb7ea1cea5d3e60618ca3";
+inline constexpr std::string_view kOcarinaManifest = "ec4c99a77c8dbe81ea773b0e12ec894cb0d69137dc26643b3ad1d9c6f8615344";
+inline constexpr std::string_view kOcarinaMainSha = "7db9ddfda088c22d219ef13496decd7077c68cd67d4b37f53f4ac46a082768f2";
+inline constexpr std::string_view kOcarinaMagic = "EMUHUB-SWITCH2-OCARINA-UPDATE-1\n";
+inline constexpr std::uint64_t kOcarinaBaseId = 0x0400486024DEC000ULL;
+inline constexpr std::uint64_t kOcarinaUpdatePackageId = 0x0400486024DEC800ULL;
+inline constexpr std::uint32_t kOcarinaUpdateVersion = 131072;
+inline constexpr std::uint32_t kOcarinaMergedFiles = 186813;
+inline constexpr std::uint64_t kOcarinaMergedBytes = 26337025347ULL;
+
 inline bool source_matches(std::string_view key, std::string_view source) {
     return key == kKey && source == kSource;
 }
 inline bool edition_source_matches(std::string_view key, std::string_view source) {
     return key == kEditionKey && source == kEditionSource;
+}
+inline bool ocarina_source_matches(std::string_view key, std::string_view source) {
+    return key == kOcarinaKey && source == kOcarinaSource;
 }
 inline std::string ticket(std::uint64_t hash) {
     if (!hash) return {};
@@ -48,7 +67,7 @@ inline std::string ticket(std::uint64_t hash) {
     std::snprintf(digits, sizeof digits, "%016llx", static_cast<unsigned long long>(hash));
     return std::string(kMagic) + digits + "\n" + std::string(kManifest) + "\n" + std::string(kBoot) + "\n";
 }
-struct Ticket { std::uint64_t key_hash; std::string boot; bool edition = false; };
+struct Ticket { std::uint64_t key_hash; std::string boot; bool edition = false; bool ocarina_update = false; };
 inline bool edition_manifest_pinned() {
     return kEditionManifest.size() == 64 && kEditionManifest.find_first_not_of('0') != std::string_view::npos;
 }
@@ -59,11 +78,26 @@ inline std::string edition_ticket(std::uint64_t hash) {
     return std::string(kEditionMagic) + digits + "\n" + std::string(kEditionRootSha) + "\n" +
            std::string(kEditionManifest) + "\n" + std::string(kEditionBoot) + "\n";
 }
+inline bool ocarina_manifest_pinned() {
+    return kOcarinaRootSha.size() == 64 && kOcarinaRootSha.find_first_not_of('0') != std::string_view::npos &&
+           kOcarinaManifest.size() == 64 && kOcarinaManifest.find_first_not_of('0') != std::string_view::npos;
+}
+inline std::string ocarina_ticket(std::uint64_t hash) {
+    if (!hash || !ocarina_manifest_pinned()) return {};
+    char digits[17]{};
+    std::snprintf(digits, sizeof digits, "%016llx", static_cast<unsigned long long>(hash));
+    return std::string(kOcarinaMagic) + digits + "\n" + std::string(kOcarinaRootSha) + "\n" +
+           std::string(kOcarinaTocSha) + "\n" + std::string(kOcarinaManifest) + "\n" +
+           std::string(kOcarinaBoot) + "\n";
+}
 inline std::optional<Ticket> parse(std::string_view body) {
     const bool edition = body.starts_with(kEditionMagic);
-    if (!edition && !body.starts_with(kMagic)) return std::nullopt;
-    if (edition && !edition_manifest_pinned()) return std::nullopt;
-    body.remove_prefix(edition ? kEditionMagic.size() : kMagic.size());
+    const bool ocarina = body.starts_with(kOcarinaMagic);
+    if (!edition && !ocarina && !body.starts_with(kMagic)) return std::nullopt;
+    if ((edition && !edition_manifest_pinned()) ||
+        (ocarina && !ocarina_manifest_pinned())) return std::nullopt;
+    body.remove_prefix(edition ? kEditionMagic.size() :
+                       ocarina ? kOcarinaMagic.size() : kMagic.size());
     if (body.size() < 17 || body[16] != '\n') return std::nullopt;
     std::uint64_t hash = 0;
     for (unsigned i = 0; i < 16; ++i) {
@@ -75,9 +109,11 @@ inline std::optional<Ticket> parse(std::string_view body) {
     }
     const std::string expected = edition ?
         std::string(kEditionRootSha) + "\n" + std::string(kEditionManifest) + "\n" + std::string(kEditionBoot) + "\n" :
-        std::string(kManifest) + "\n" + std::string(kBoot) + "\n";
+        ocarina ? std::string(kOcarinaRootSha) + "\n" + std::string(kOcarinaTocSha) + "\n" +
+                  std::string(kOcarinaManifest) + "\n" + std::string(kOcarinaBoot) + "\n" :
+                  std::string(kManifest) + "\n" + std::string(kBoot) + "\n";
     if (!hash || body.substr(17) != expected) return std::nullopt;
-    return Ticket{hash, std::string(edition ? kEditionBoot : kBoot), edition};
+    return Ticket{hash, std::string(edition ? kEditionBoot : ocarina ? kOcarinaBoot : kBoot), edition, ocarina};
 }
 inline bool regular_file(std::string_view path, std::uint64_t bytes) {
     const int fd = ::open(std::string(path).c_str(), O_RDONLY | O_NOFOLLOW);
@@ -133,6 +169,33 @@ inline bool edition_receipt_ready() { return edition_receipt_at(kEditionReady); 
 inline bool edition_ready() {
     if (!edition_receipt_ready() || !regular_file(kEditionBoot, 29043641)) return false;
     const int dir = ::open(kEditionAoc.data(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (dir < 0) return false;
+    struct stat info{};
+    const bool directory = ::fstat(dir, &info) == 0 && S_ISDIR(info.st_mode);
+    ::close(dir);
+    return directory;
+}
+inline bool ocarina_receipt_at(std::string_view receipt) {
+    if (!ocarina_manifest_pinned()) return false;
+    const std::string expected = "EMUHUB-SWITCH2-OCARINA-READY-1\n" +
+        std::string(kOcarinaRootSha) + "\n" + std::string(kOcarinaTocSha) + "\n" +
+        std::string(kOcarinaManifest) + "\n" + std::string(kOcarinaMainSha) + "\n" +
+        std::to_string(kOcarinaMergedFiles) + "\n" + std::to_string(kOcarinaMergedBytes) + "\n";
+    const int fd = ::open(std::string(receipt).c_str(), O_RDONLY | O_NOFOLLOW);
+    if (fd < 0) return false;
+    struct stat info{};
+    char bytes[512]{};
+    const bool bounded = ::fstat(fd, &info) == 0 && S_ISREG(info.st_mode) &&
+                         info.st_size == static_cast<off_t>(expected.size());
+    const ssize_t count = bounded ? ::read(fd, bytes, sizeof bytes) : -1;
+    const bool closed = ::close(fd) == 0;
+    return bounded && closed && count == info.st_size &&
+           std::string_view(bytes, static_cast<std::size_t>(count)) == expected;
+}
+inline bool ocarina_receipt_ready() { return ocarina_receipt_at(kOcarinaReady); }
+inline bool ocarina_ready() {
+    if (!ocarina_receipt_ready() || !regular_file(kOcarinaBoot, 29953289)) return false;
+    const int dir = ::open(kOcarinaRomFS.data(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
     if (dir < 0) return false;
     struct stat info{};
     const bool directory = ::fstat(dir, &info) == 0 && S_ISDIR(info.st_mode);
