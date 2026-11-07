@@ -280,6 +280,21 @@ int execute(int argc,char **argv) {
     if(ready<0&&errno==EEXIST) {
         std::string prior;
         receipt_ok=read_small_at(stage,receipt_name,prior,1024)&&prior==signed_receipt;
+        if(!receipt_ok && !prior.empty()) {
+            // The full selected tree was read back above. A fresh scanner
+            // generation can reuse it without extracting duplicate content.
+            struct stat oldst{};
+            if(fstatat(stage,receipt_name,&oldst,AT_SYMLINK_NOFOLLOW)==0 &&
+               S_ISREG(oldst.st_mode)) {
+                int next=openat(stage,".verified.new",
+                    O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
+                if(next>=0) {
+                    receipt_ok=write_all(next,signed_receipt.data(),signed_receipt.size())&&fsync(next)==0;
+                    close(next);
+                    if(receipt_ok)receipt_ok=renameat(stage,".verified.new",stage,receipt_name)==0&&fsync(stage)==0;
+                }
+            }
+        }
     } else if(ready>=0) {
         receipt_ok=write_all(ready,signed_receipt.data(),signed_receipt.size())&&fsync(ready)==0;
         close(ready);receipt_ok=receipt_ok&&fsync(stage)==0;
