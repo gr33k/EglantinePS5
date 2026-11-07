@@ -2685,6 +2685,7 @@ void Initialize() {
         "${eden_app_crt}" "${PORT_ROOT}/src/lifecycle.c" "${PORT_ROOT}/src/direct_memory.c"
         "${PORT_BUILD_DIR}/app_heap.c")
     target_sources(eden-headless PRIVATE "${EDEN_PORT_DIR}/native_nup_union_extract.cpp")
+    target_link_libraries(eden-headless PRIVATE libzstd_static)
     target_compile_definitions(eden-headless PRIVATE EMUHUB_PROVIDER_EMBED=1 EM_HARDENED_TARGET=1)
     target_compile_definitions(eden-headless PRIVATE PS5_NATIVE=1
         $<$<BOOL:${EDEN_MKW_DIAGNOSTICS}>:EDEN_MKW_DIAGNOSTICS=1>

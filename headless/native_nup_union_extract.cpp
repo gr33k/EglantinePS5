@@ -2,6 +2,7 @@
 // Uses the Eglantine self-update SHA-256 implementation (GPL-3.0-or-later).
 #include "self_update_sha256.h"
 #include "signature_verify.hpp"
+#include <zstd.h>
 #include <algorithm>
 #include <cerrno>
 #include <dirent.h>
@@ -180,12 +181,47 @@ bool file_at_path(int stage,const Row &row,bool verify_only,int source) {
     }
     struct stat st{};bool ok=fstat(fd,&st)==0&&S_ISREG(st.st_mode);
     if(verify_only)ok=ok&&static_cast<uint64_t>(st.st_size)==row.size;
-    self_update_sha256 hash;self_update_sha256_start(&hash);std::vector<char> buffer(kChunk);uint64_t left=row.size,off=row.off;
-    while(ok&&left){size_t n=static_cast<size_t>(std::min<uint64_t>(left,buffer.size()));
-        if(verify_only)ok=read_exact_at(fd,buffer.data(),n,row.size-left);
-        else ok=read_exact_at(source,buffer.data(),n,off)&&write_all(fd,buffer.data(),n);
-        if(ok)self_update_sha256_add(&hash,buffer.data(),n);
-        left-=n;off+=n;}
+    self_update_sha256 hash;self_update_sha256_start(&hash);std::vector<char> buffer(kChunk);
+    if(ok && !verify_only && row.codec==1) {
+        // Bounded chunks; never buffer a whole NUP extent.
+        std::vector<char> input(kChunk);
+        ZSTD_DStream* stream=ZSTD_createDStream();
+        ok=stream!=nullptr;
+        if(ok)ok=!ZSTD_isError(ZSTD_initDStream(stream));
+        ZSTD_inBuffer in{nullptr,0,0};
+        uint64_t remaining=row.stored,offset=row.off,produced=0;
+        bool finished=false;
+        while(ok&&!finished) {
+            if(in.pos==in.size && remaining) {
+                size_t n=static_cast<size_t>(std::min<uint64_t>(remaining,input.size()));
+                ok=read_exact_at(source,input.data(),n,offset);
+                if(!ok)break;
+                in={input.data(),n,0};remaining-=n;offset+=n;
+            }
+            ZSTD_outBuffer out{buffer.data(),buffer.size(),0};
+            const size_t before=in.pos;
+            const size_t result=ZSTD_decompressStream(stream,&out,&in);
+            if(ZSTD_isError(result)||out.pos>row.size-produced){ok=false;break;}
+            if(out.pos) {
+                ok=write_all(fd,buffer.data(),out.pos);
+                if(ok)self_update_sha256_add(&hash,buffer.data(),out.pos);
+                produced+=out.pos;
+            }
+            if(result==0) {
+                finished=true;
+                if(remaining||in.pos<in.size)ok=false;
+            } else if(in.pos==before && out.pos==0)ok=false;
+        }
+        ok=ok&&finished&&produced==row.size;
+        ZSTD_freeDStream(stream);
+    } else {
+        uint64_t left=row.size,off=row.off;
+        while(ok&&left){size_t n=static_cast<size_t>(std::min<uint64_t>(left,buffer.size()));
+            if(verify_only)ok=read_exact_at(fd,buffer.data(),n,row.size-left);
+            else ok=read_exact_at(source,buffer.data(),n,off)&&write_all(fd,buffer.data(),n);
+            if(ok)self_update_sha256_add(&hash,buffer.data(),n);
+            left-=n;off+=n;}
+    }
     unsigned char digest[32];char hex[65];self_update_sha256_finish(&hash,digest);self_update_sha256_hex(digest,hex);
     ok=ok&&row.sha==hex;
     if(ok&&!verify_only)ok=fsync(fd)==0;
@@ -221,7 +257,7 @@ int execute(int argc,char **argv) {
     std::vector<Row> rows;rows.reserve(static_cast<size_t>(expected_count));std::set<std::string> seen,folded,dirs;uint64_t total=0,lastoff=0;
     for(size_t i=5;i<ls.size();++i){auto v=tabs(ls[i]);Row row{};uint64_t codec=0;
         if(v.size()!=6||!number(v[0],row.off)||!number(v[1],row.stored)||!number(v[2],row.size)||!number(v[3],codec)||
-           codec!=0||!hex64(v[4])||!safe_path(v[5])||!seen.insert(v[5]).second||row.stored!=row.size||
+           codec>1||!hex64(v[4])||!safe_path(v[5])||!seen.insert(v[5]).second||(codec==0&&row.stored!=row.size)||
            row.off<blob||row.off<lastoff||row.off>source_size||row.stored>source_size-row.off||total>UINT64_MAX-row.size){close(src);close(root);return fail("MANIFEST_ROW_UNSAFE_OR_UNSUPPORTED");}
         std::string fold=v[5];for(char &ch:fold)if(ch>='A'&&ch<='Z')ch=static_cast<char>(ch+32);
         if(!folded.insert(fold).second){close(src);close(root);return fail("MANIFEST_CASE_COLLISION");}
