@@ -70,28 +70,19 @@ cmake -S "$scratch/source" -B "$scratch/native-local" -G Ninja \
     -DENABLE_WERROR=OFF -Dzstd_FORCE_BUNDLED=ON -DBoost_FORCE_BUNDLED=ON -Dfmt_FORCE_BUNDLED=ON \
     -DDYNARMIC_ENABLE_NO_EXECUTE_SUPPORT=ON -DDYNARMIC_IGNORE_ASSERTS=OFF \
     -DSDL_UNIX_CONSOLE_BUILD=ON -DSDL_OPENGL=OFF -DSDL_OPENGLES=OFF -DSDL_RENDER=OFF -DSDL_GPU=OFF
-python3 -B "$root/headless/check_slab_lifetime.py" \
-    "$scratch/native-local/headless/include/core/hle/kernel/slab_helpers.h" \
-    "$scratch/source/src/core/hle/kernel/slab_helpers.h"
+python3 -B "$root/headless/check_slab_lifetime.py" "$scratch/source/src/core/hle/kernel/slab_helpers.h"
 echo "Building Eden with $jobs parallel jobs"
 cmake --build "$scratch/native-local" --target eden-headless core -j "$jobs"
-# In every build: an object that saw Eden's own table header would write a table the rest keeps sparse.
-python3 -B "$root/tools/check-sparse-header.py" "$scratch/native-local"
-python3 -B "$root/tools/check-macro-headers.py" "$scratch/native-local"
-python3 -B "$root/tools/check-multiplayer-headers.py" "$scratch/native-local"
 if [[ "${EDEN_PS5_VULKAN:-OFF}" == ON ]]; then
-    python3 -B "$root/tools/check-vulkan-handoff.py"
-    python3 -B "$root/tools/check-transient-images.py"
-    python3 -B "$root/tools/check-native-allocator-header.py"
-    python3 -B "$root/tools/check-gpu-time-probe.py"
-    python3 -B "$root/tools/check-fence-requirements.py"
+    for check in check-vulkan-handoff check-gpu-time-probe; do
+        python3 -B "$root/tools/$check.py"
+    done
 fi
 # Source checks of the release configuration (development builds opt out: EDEN_SKIP_SOURCE_CHECKS=1).
 [[ ${EDEN_SKIP_SOURCE_CHECKS:-0} == 1 ]] && exit 0
-python3 -B "$root/headless/check_audio_shutdown.py" "$scratch/native-local/headless/core.cpp" "$scratch/source/src/core/core.cpp"
+python3 -B "$root/headless/check_audio_shutdown.py" "$scratch/source/src/core/core.cpp"
 python3 -B "$root/tools/check-load-failure.py"
 python3 -B "$root/tools/check-launcher-autoboot.py"
-python3 -B "$root/tools/check-extracted-content.py"
 python3 -B "$root/tools/check-vfs-file-budget.py"
 python3 -B "$root/tools/check-nso-memory.py"
 python3 -B "$root/tools/check-performance.py"
@@ -105,9 +96,7 @@ python3 -B "$root/tools/check-jit-patch-lookup.py"
 python3 -B "$root/tools/check-jit-assert.py"
 python3 -B "$root/tools/check-crash-report.py"
 python3 -B "$root/tools/check-system-keyboard.py"
-python3 -B "$root/tools/check-nx2-core.py"
 python3 -B "$root/tools/check-shader-attributes.py"
-python3 -B "$root/tools/check-bananza-terrain.py"
 
 if [[ "$probe" == OFF ]]; then
     python3 -B "$root/tools/check-exclusive-monitor.py"
@@ -118,7 +107,6 @@ else
 fi
 if [[ "$graphics" == ON ]]; then
     python3 -B "$root/tools/check-native-gpu-thread.py"
-    python3 -B "$root/tools/check-gpu-producer-stop.py"
     if [[ "${EDEN_PS5_VULKAN:-OFF}" == ON ]]; then
         python3 -B "$root/tools/check-staging-pressure.py"
     fi
@@ -129,4 +117,5 @@ if [[ "$graphics" == ON ]]; then
 fi
 
 python3 -B tools/check-hud.py
+python3 -B tools/check-hud-mask.py
 python3 -B tools/check-game-frame-summary.py

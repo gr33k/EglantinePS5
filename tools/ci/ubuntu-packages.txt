@@ -21,6 +21,5 @@ clang-21 lld-21 llvm-21 libclang-rt-21-dev
 # LLVM 21 development files and OpenCL C: RADV's host tools (mesa_clc, vtn_bindgen2)
 llvm-21-dev libclang-21-dev libclang-cpp21-dev libclc-21 libclc-21-dev libllvmspirvlib-21-dev
 spirv-tools-dev spirv-headers libexpat1-dev zlib1g-dev
-# X11 and Wayland headers: Eden's vulkan_common/vulkan.h enables both Vulkan platforms on Linux,
-# and the host core check (tools/check-nx2-core.py) compiles code that includes it
+# X11 and Wayland headers: Eden's vulkan_common/vulkan.h enables both Vulkan platforms on Linux
 libx11-dev libwayland-dev

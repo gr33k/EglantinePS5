@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
-"""Exercise the actual native lifecycle and verify the generated worker body is preserved."""
+"""Exercise the GPU worker's native lifecycle and check its markers (Eglantine/'s gpu_thread.cpp)."""
 from pathlib import Path
 import subprocess
 import tempfile
 import re
+from eglantine_source import EGLANTINE, source as eglantine_source  # the core, part of this repository
 
 root = Path(__file__).resolve().parents[1]
 cache = Path((root / '.local/headless-cache').read_text().strip())
-upstream = cache / 'source/src'
-generated = cache / 'native-local/headless/gpu_thread.cpp'
-source = (upstream / 'video_core/gpu_thread.cpp').read_text()
-worker = generated.read_text()
-body = source.split('thread = std::jthread([&](std::stop_token stop_token) {', 1)[1].split('\n    });', 1)[0]
-dispatch_call = re.search(r'\n( {16}Profile::Scope scope\{Profile::Zone::Push\};\n.*?scheduler\.Push\(system\.GPU\(\), submit_list->channel, std::move\(submit_list->entries\)\);)', source, re.S).group(1)
+# The GPU worker as this build compiles it (Eglantine/'s gpu_thread.cpp, PS5 view).
+worker = eglantine_source('src/video_core/gpu_thread.cpp')
+dispatch_call = re.search(r'\n( {16}Profile::Scope scope\{Profile::Zone::Push\};\n.*?scheduler\.Push\(system\.GPU\(\), submit_list->channel, std::move\(submit_list->entries\)\);)', worker, re.S).group(1)
 idle_call = ('                Profile::Scope scope{Profile::Zone::Idle};\n'
              '                state.queue.PopWait(next, stop_token);')
 development = 'EDEN_DEV_PROFILE:BOOL=ON' in (cache / 'native-local/CMakeCache.txt').read_text()
+lifecycle_at = worker.index('// PS5-only ThreadManager lifecycle')
+lifecycle_start = worker.rindex('// SPDX-License-Identifier: GPL-3.0-or-later', 0, lifecycle_at)
+lifecycle_end = worker.index('} // namespace VideoCommon::GPUThread', lifecycle_at) + len('} // namespace VideoCommon::GPUThread')
+lifecycle = worker[lifecycle_start:lifecycle_end] + '\n'
 for call, timer, indent in (
     (dispatch_call, 'dispatch_timer(::Eden::Performance::gpu_dispatch)', '                '),
     (idle_call, 'idle_timer(::Eden::Performance::gpu_queue_wait)', '                '),
@@ -41,25 +43,26 @@ loading_wait = """                if (Eden::LoadingTick(renderer, false)) {
 """ + idle_call + """
                 }"""
 assert untraced.count(loading_wait) == 1
-untraced = untraced.replace(loading_wait, idle_call)
-assert body in untraced, 'GPU worker semantics changed beyond dispatch markers and startup animation wait'
 
 assert 'stop_source.get_token()' in worker and 'thread.get_stop_token()' not in worker
 assert 'ThreadManager::~ThreadManager() { Stop(); }' in worker
-gpu = (cache / 'native-local/headless/gpu.cpp').read_text()
+gpu = eglantine_source('src/video_core/gpu.cpp')
 assert 'GPU::~GPU() { impl->NotifyShutdown(); }' in gpu
 shutdown = gpu.split('    void NotifyShutdown() {', 1)[1].split('    /// Obtain', 1)[0]
-assert 'sync_cv.notify_all();\n        }\n        gpu_thread.Stop();' in shutdown
-assert shutdown.index('gpu_thread.Stop();') < shutdown.index('sync_requests.clear();') < shutdown.index('sync_requests_stopped = true;')
-if '~Impl() = default;' in (upstream / 'video_core/gpu.cpp').read_text():
-    assert '~Impl() { gpu_thread.Stop(); if (renderer && Settings::IsOpenGL()) { renderer->Context().MakeCurrent(); glFinish(); } }' in gpu
-else:
-    destructor = gpu.split('    ~Impl() {', 1)[1].split('\n    std::shared_ptr<Control::ChannelState> CreateChannel', 1)[0]
-    assert destructor.index('NotifyShutdown();') < destructor.index('renderer->Context().MakeCurrent();')
-    assert destructor.index('renderer->Context().MakeCurrent();') < destructor.index('glFinish();') < destructor.index('renderer.reset();')
-    assert 'renderer && Settings::IsOpenGL()' in destructor
-    assert 'renderer.reset();' in (upstream / 'video_core/gpu.cpp').read_text()
-core = (cache / 'native-local/headless/core.cpp').read_text()
+# The worker stops first; then the sync requests it can no longer run are dropped and their waiters,
+# and the guest's sync waiters, released (they would wait forever in host code otherwise).
+assert shutdown.index('gpu_thread.NotifyShutdown();') < shutdown.index('sync_requests.clear();') \
+    < shutdown.index('sync_requests_dropped = true;') < shutdown.index('sync_request_cv.notify_all();')
+assert shutdown.index('shutting_down.store(true') < shutdown.index('sync_cv.notify_all();')
+# It can be joined first: the waits on the guest it may be in give up once the system shuts down.
+assert 'void ThreadManager::NotifyShutdown() {\n    Stop();' in worker
+assert 'while (!synced && !system.IsShuttingDown())' in eglantine_source('src/video_core/dma_pusher.cpp')
+assert 'while (word != value && !dma_pusher.system.IsShuttingDown())' in eglantine_source('src/video_core/engines/puller.cpp')
+destructor = gpu.split('    ~Impl() {', 1)[1].split('\n    std::shared_ptr<Control::ChannelState> CreateChannel', 1)[0]
+assert destructor.index('NotifyShutdown();') < destructor.index('renderer->Context().MakeCurrent();')
+assert destructor.index('renderer->Context().MakeCurrent();') < destructor.index('glFinish();') < destructor.index('renderer.reset();')
+assert 'renderer && Settings::IsOpenGL()' in destructor
+core = eglantine_source('src/core/core.cpp')
 shutdown_core = core.split('    void ShutdownMainProcess() {', 1)[1].split('    bool IsShuttingDown()', 1)[0]
 assert shutdown_core.index('gpu_core->NotifyShutdown()') < shutdown_core.index('services.reset()') < shutdown_core.index('gpu_core.reset()')
 code = r'''
@@ -207,8 +210,10 @@ int main(int argc, char**) {
 with tempfile.TemporaryDirectory(prefix='eden-gpu-thread-') as folder:
     temp = Path(folder)
     (temp / 'check.cpp').write_text(code)
+    (temp / 'native_gpu_thread.inc').write_text(lifecycle)  # the lifecycle section of gpu_thread.cpp
     subprocess.run(['c++', '-std=c++20', '-pthread', '-Wall', '-Wextra', '-Werror',
-                    '-I', str(upstream), '-I', str(root / 'headless'), str(temp / 'check.cpp'),
+                    '-I', str(temp), '-I', str(EGLANTINE / 'src'), '-I', str(root), '-I', str(root / 'headless'),
+                    str(temp / 'check.cpp'),
                     '-o', str(temp / 'check')], check=True)
     subprocess.run([str(temp / 'check')], check=True, timeout=15)
     failed = subprocess.run([str(temp / 'check'), 'throw'], capture_output=True, text=True, timeout=15)

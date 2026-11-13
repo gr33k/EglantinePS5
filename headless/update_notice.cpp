@@ -111,6 +111,7 @@ Phase FromKit(self_update_phase phase) {
 } // namespace
 
 void Start() {
+    if (Eden::EmuHubProviderMode()) return;
     {
         const std::lock_guard guard(lock);
         if (started) return;

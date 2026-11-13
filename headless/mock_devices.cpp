@@ -103,11 +103,16 @@ int scePadOpen(int user, int type, int index, const void*) {
 }
 int scePadGetHandle(int, int, int) { return -1; }
 int scePadClose(int) { ++state.pad_closes; return 0; }
-int scePadSetVibrationMode(int, int) { return 0; }
+int scePadSetVibrationMode(int handle, int mode) {
+    std::scoped_lock lock(state.mutex);
+    state.vibration_modes.emplace_back(handle, mode);
+    return mode == 1 ? state.vibration_mode_1_result : 0;
+}
 int scePadSetMotionSensorState(int, bool) { return 0; }
 int scePadSetVibration(int, const ps5::pad::Vibration* vibration) {
     std::scoped_lock lock(state.mutex);
     state.vibrations.push_back(*vibration);
+    state.wake.notify_all();  // the haptics worker's fallback sets the motors from its own thread
     return 0;
 }
 int scePadRead(int, ps5::pad::Data* data, int capacity) {
@@ -134,9 +139,21 @@ int scePadRead(int, ps5::pad::Data* data, int capacity) {
     return static_cast<int>(count);
 }
 int sceAudioOutInit() { return 0; }
+// The pad's vibration port: S16 (1) or F32 (4) stereo, 256 frames at 48 kHz, for a signed-in user.
+constexpr int kHapticPortType = 10, kHapticHandles = 300;
 int sceAudioOutOpen(int user, int type, int index, std::uint32_t grain,
                     std::uint32_t rate, std::uint32_t format) {
     std::scoped_lock lock(state.mutex);
+    if (type == kHapticPortType) {
+        if (state.fail_haptic_open || user != state.foreground_user || index != 0 || grain != 256 ||
+            rate != 48000 || (format != 1 && format != 4) || static_cast<int>(format) == state.haptic_fail_format)
+            return -1;
+        state.haptic_open_users.push_back(user);
+        state.haptic_open_formats.push_back(static_cast<int>(format));
+        const int handle = kHapticHandles + ++state.haptic_opens;
+        state.haptic_audio[handle];
+        return handle;
+    }
     if (state.fail_audio_open || user != 0xff || type != 0 || index != 0 ||
         grain != 256 || rate != 48000 || format != 1) return -1;
     const auto handle = 100 + ++state.audio_opens;
@@ -147,6 +164,24 @@ int sceAudioOutSetVolume(int, int flags, const int* volume) {
     return state.fail_volume || flags != 3 || volume[0] != 0x8000 || volume[1] != 0x8000 ? -1 : 0;
 }
 int sceAudioOutOutput(int handle, const void* samples) {
+    if (handle > kHapticHandles) {
+        {
+            std::scoped_lock lock(state.mutex);
+            if (!samples) { ++state.haptic_drains; return 0; }
+            if (state.fail_haptic_output) return -1;
+            const auto it = state.haptic_audio.find(handle);
+            if (it == state.haptic_audio.end()) return -1;
+            // A port's format is the one it was opened with, the n-th entry for handle 300 + n.
+            const bool f32 = state.haptic_open_formats[handle - kHapticHandles - 1] == 4;
+            const auto* bytes = static_cast<const std::uint8_t*>(samples);
+            auto& blocks = it->second;
+            blocks.emplace_back(bytes, bytes + 512 * (f32 ? sizeof(float) : sizeof(std::int16_t)));
+            if (blocks.size() > 256) blocks.pop_front();  // bounded during whole-core runs
+            state.wake.notify_all();
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(5333));
+        return 0;
+    }
     {
         std::scoped_lock lock(state.mutex);
         if (!samples) { ++state.audio_drains; return 0; }
@@ -162,5 +197,22 @@ int sceAudioOutOutput(int handle, const void* samples) {
     std::this_thread::sleep_for(std::chrono::microseconds(5333));
     return 0;
 }
-int sceAudioOutClose(int) { std::scoped_lock lock(state.mutex); ++state.audio_closes; return 0; }
+int sceAudioOutClose(int handle) {
+    if (handle > kHapticHandles) {
+        // A delay here holds the haptics' routing lock as a slow close would (pad_haptics.cpp).
+        std::chrono::milliseconds delay;
+        {
+            std::scoped_lock lock(state.mutex);
+            delay = state.haptic_close_delay;
+        }
+        std::this_thread::sleep_for(delay);
+        std::scoped_lock lock(state.mutex);
+        ++state.haptic_closes;
+        state.wake.notify_all();
+        return 0;
+    }
+    std::scoped_lock lock(state.mutex);
+    ++state.audio_closes;
+    return 0;
+}
 }

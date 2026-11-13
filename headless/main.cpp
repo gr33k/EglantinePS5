@@ -15,6 +15,9 @@
 #include <exception>
 #include "assets_dir.h"
 #include "forwarded_launch.h"
+#include "emuhub_switch2_ticket.hpp"
+#include "emuhub_direct_nup.hpp"
+#include "held_nup_vfs.hpp"
 #include "gpu_failure.h"
 #include "guest_fault.h"
 #include "jit_list.h"
@@ -37,6 +40,7 @@ extern "C" size_t eden_heap_last_failure(unsigned*, size_t*);
 #include <mutex>
 #include <thread>
 #include <new>
+#include <memory>
 #include <string_view>
 #include <stdexcept>
 #include <fstream>
@@ -63,6 +67,7 @@ extern "C" size_t eden_heap_last_failure(unsigned*, size_t*);
 #include "native_directory.h"
 #include "extracted_game.h"
 #include "cache_budget.h"
+#include "guest_clock.h"
 #include "performance.h"
 #include "crash_site.h"
 #include "core/memory.h"
@@ -73,11 +78,16 @@ extern "C" size_t eden_heap_last_failure(unsigned*, size_t*);
 #include "stall_watchdog.h"
 #include "dev_vulkan.h"
 #include "../src/fastmem.h"
+// The 64-bit fastmem window's demoted sites, kept per title (headless/dynarmic/fastmem-callback.cmake).
+extern "C" std::size_t eden_fastmem64_load_sites(const char*, unsigned long long, const unsigned char*) __attribute__((weak));
+extern "C" std::size_t eden_fastmem64_save_sites(const char*, unsigned long long, unsigned long long,
+                                                 const unsigned char*) __attribute__((weak));
 #include "crash_report.h"
 #include "eglantineps5/frontend.h"
 #include "eglantineps5/version.h"
 extern "C" void ps5_opengl_heap_snapshot(const char*, unsigned);
 extern "C" std::int64_t sceKernelGetDirectMemorySize();
+extern "C" int sceSystemServiceLoadExec(const char*, const char* const*);
 #else
 #include <malloc.h>
 #include "mock_devices.h"
@@ -127,8 +137,14 @@ extern "C" bool eden_jit_shared;  // headless/dynarmic/jit_group_support.inc
 #endif
 #include "profiles.h"
 #include "stop_limit.h"
+#include "core/device_memory.h"
+#include "core/hle/kernel/k_memory_layout.h"
+#include "core/hle/kernel/k_memory_manager.h"
+#include "core/hle/kernel/kernel.h"
 namespace Common {
 bool SparseTablesAvailable() noexcept; // src/memory_pages.cpp
+void GuestMemoryUsage(std::size_t* span, std::size_t* held) noexcept;
+std::size_t GuestMemoryHeldIn(std::uint64_t offset, std::size_t bytes) noexcept;
 }
 #if defined(EDEN_DEV_PROFILE) || defined(EDEN_DEV_ROM_ID)
 static bool dev_stop_hang = false; // dev-settings stop_hang=on
@@ -183,6 +199,7 @@ static void MigrateSandboxData() {
 // it is a rename of each folder. Nothing moves unless all of it can: a folder chosen in Settings,
 // or anything already in /data/eglantineps5, leaves everything where it is.
 static void MoveGameFilesOutOfTheApp() {
+    if (Eden::EmuHubProviderMode()) return;
     const std::string from = std::string{Eden::kInstallDir} + "/assets", to = Eden::kDefaultAssetsDir;
     const std::string saved = Eden::LoadSavedAssetsDir();
     if ((!saved.empty() && saved != from) || !Eden::FileExists(from + "/keys/prod.keys") ||
@@ -254,8 +271,54 @@ static void UpdateGrips(Core::System& system, Eden::Pad& pad) {
 void EdenRegisterNirBackend(); // nir_backend.cpp
 #endif
 
+#ifdef PS5_NATIVE
+static void ReturnToEmuHubFrontend() {
+    for (const char* path : {"/app0/es-de/es-de.bin",
+            "/system_ex/app/PPSA91337/es-de/es-de.bin",
+            "/data/homebrew/PPSA91337/es-de/es-de.bin",
+            "/mnt/sandbox/PPSA91337_000/app0/es-de/es-de.bin"}) {
+        if (!Eden::FileExists(path)) continue;
+        const int result = sceSystemServiceLoadExec(path, nullptr);
+        if (result >= 0) {
+            std::this_thread::sleep_for(std::chrono::seconds(10));
+            return;
+        }
+    }
+}
+#endif
+
+extern "C" int eden_emuhub_provider_mode() { return Eden::EmuHubProviderMode() ? 1 : 0; }
+
 int main(int argc, char** argv) {
+    std::shared_ptr<emuhub_direct_nup::HeldNupFd> held_nup;
+#ifdef PS5_NATIVE
+    const bool nested_emuhub = Eden::FileExists("/app0/es-de/es-de.bin") &&
+        Eden::FileExists("/app0/providers/switch2/eboot.bin");
+    SCOPE_EXIT { if (nested_emuhub) ReturnToEmuHubFrontend(); };
+    std::string provider_rom;
+    bool direct_nup = false;
+    if (nested_emuhub) {
+        Eden::EmuHubProviderMode() = true;
+        const auto requested = Eden::ParseForwardedArgs(argc, argv);
+        if (!requested.rom.empty()) {
+            // A direct NUP launch is an explicit signed-wheel invocation. It
+            // cannot be mixed with the legacy prepared-folder request.
+            if (!requested.exit_after_game ||
+                !emuhub_direct_nup::path_ok(requested.rom) ||
+                Eden::FileExists(emuhub_switch2::kRequest.data())) return 2;
+            provider_rom = requested.rom;
+            direct_nup = true;
+        } else {
+            const auto ticket = emuhub_switch2::consume(emuhub_switch2::kRequest.data());
+            if (!ticket) return 2;
+            provider_rom = ticket->boot;
+        }
+    }
+#endif
     try {
+#ifdef PS5_NATIVE
+        SCOPE_EXIT { eden_clear_direct_nup(); };
+#endif
 #ifdef EDEN_PS5_RADV
         // Compute shaders reach RADV as NIR where translatable (nir_handoff.h; EDEN_NX2_NIR=0: SPIR-V).
         EdenRegisterNirBackend();
@@ -279,7 +342,28 @@ int main(int argc, char** argv) {
         if (access("/app0/no-filesystem-access.txt", F_OK) == 0) Eden::FilesystemAccessStatus() = 99;
         else
 #endif
-        Eden::FilesystemAccessStatus() = static_cast<int>(elevation::request(elevation::Capability::filesystem));
+        Eden::FilesystemAccessStatus() = static_cast<int>(elevation::request(
+            elevation::Capability::filesystem, Eden::EmuHubProviderMode() ? nullptr : "/app0/lapy.elf"));
+        if (nested_emuhub) {
+            if (!Eden::FilesystemAccess()) return 2;
+            if (direct_nup) {
+                std::string bind_error;
+                for (const auto root : emuhub_direct_nup::kRoots) {
+                    if (!emuhub_direct_nup::under(provider_rom, root)) continue;
+                    held_nup = emuhub_direct_nup::HeldNupFd::OpenAt(
+                        provider_rom, root, 64ull * 1024 * 1024 * 1024, &bind_error);
+                    break;
+                }
+                if (!held_nup || !held_nup->ValidateContainer(&bind_error)) {
+                    Eden::BootTrace::Line("direct NUP open failed: %s", bind_error.c_str());
+                    return 2;
+                }
+                eden_bind_direct_nup(provider_rom.c_str(),
+                                     std::make_shared<emuhub_direct_nup::HeldVfsFile>(held_nup));
+            } else if (!emuhub_switch2::ready()) {
+                return 2;
+            }
+        }
         Eden::BootTrace::Line("filesystem access returned status=%d, uid %d/%d gid %d/%d", Eden::FilesystemAccessStatus(),
                               static_cast<int>(getuid()), static_cast<int>(geteuid()), static_cast<int>(getgid()),
                               static_cast<int>(getegid()));
@@ -294,7 +378,7 @@ int main(int argc, char** argv) {
         // root, which may set its group.
         if (getegid() != getgid() && setegid(getgid()) != 0)
             Eden::Report("filesystem access", "Could not match the effective group; RADV's disk cache stays off");
-        if (Eden::FilesystemAccess()) {
+        if (Eden::FilesystemAccess() && !Eden::EmuHubProviderMode()) {
             MigrateSandboxData();
             MoveGameFilesOutOfTheApp();
         }
@@ -381,6 +465,12 @@ int main(int argc, char** argv) {
                     Eden::Report("cache", "The driver's shader cache could not move to the data folder; it starts empty");
                 (void)mkdir(cache.c_str(), 0777);
                 setenv("MESA_SHADER_CACHE_DIR", cache.c_str(), 1);
+                // The console gives a process ~267 descriptors (RLIMIT_NOFILE says 13952). Mesa's
+                // cache database keeps 4 open per part, opening parts as they are used: its default
+                // 50 parts grew to ~84 descriptors in two minutes of Mario Kart World (and could
+                // reach 200), which with the 128 the VFS keeps for loose game files ran out and the
+                // game's own file opens failed ("Too many open files"). 4 parts: 16 at most.
+                setenv("MESA_DISK_CACHE_DATABASE_NUM_PARTS", "4", 0);
                 Eden::Report("cache", ("RADV shader cache: " + cache).c_str());
             }
         }
@@ -446,14 +536,26 @@ int main(int argc, char** argv) {
         std::string launch_error;
         // The previous run crashed: the launcher says where its report is.
         if (!last_crash.report.empty()) launch_error = std::string{Eden::Crash::kNotice} + last_crash.report;
-        const Eden::ForwardedArgs forwarded = Eden::ParseForwardedArgs(argc, argv);
+        Eden::ForwardedArgs forwarded = Eden::ParseForwardedArgs(argc, argv);
+#ifdef PS5_NATIVE
+        if (nested_emuhub) {
+            forwarded.rom = provider_rom;
+            forwarded.exit_after_game = true;
+        }
+#endif
         std::string forwarded_game;
         bool forwarded_session = false;
         if (!forwarded.rom.empty() && last_crash.report.empty()) {
             std::string path = Eden::ResolveForwardedRom(forwarded.rom, Eden::AssetsPath("roms"));
-            if (const auto main = Eden::ExtractedGameMain(path); !main.empty()) path = main;
-            if (!path.empty() && Eden::FileExists(path)) forwarded_game = path;
+            if (!held_nup) {
+                if (const auto main = Eden::ExtractedGameMain(path); !main.empty()) path = main;
+            }
+            if (!path.empty() && ((held_nup && path == held_nup->Path()) || Eden::FileExists(path)))
+                forwarded_game = path;
             else launch_error = "Forwarded game not found: " + (path.empty() ? forwarded.rom : path);
+#ifdef PS5_NATIVE
+            if (nested_emuhub && forwarded_game.empty()) return 2;
+#endif
             Eden::BootTrace::Line("forwarded game: %s", forwarded_game.empty() ? "not found" : "found");
         }
 #ifdef MKW_DIAGNOSTIC_INPUT
@@ -542,6 +644,9 @@ int main(int argc, char** argv) {
                                           std::pair{"EDEN_PS5_WORKER_SPIN_US", "300"}}) {
             setenv(name, value, 0);
         }
+        // The 64-bit fastmem window (src/host_memory.cpp, Window64): opt-in while it is qualified,
+        // EDEN_FASTMEM64=1. Chosen here, before Core::System (and so HostMemory) is made.
+        if (const char* window64 = std::getenv("EDEN_FASTMEM64")) Eden::Fastmem::RequestA64(window64[0] == '1');
 #ifdef EDEN_MKW_DIAGNOSTICS
         // Temporary capture for the Mario Kart World loading-screen investigation.
         const auto diagnostic_capture_dir = Eden::LogFile("mkw-gpfifo-" + std::to_string(getpid()));
@@ -607,6 +712,9 @@ int main(int argc, char** argv) {
             Eden::Report("exit", "Forwarded game ended");
             return 0;
         } else {
+#ifdef PS5_NATIVE
+        if (nested_emuhub) return 2; // Never expose the standalone library in provider mode.
+#endif
         guest_fault_retries = 0;
         forwarded_session = false;
 #if defined(EDEN_DEV_PROFILE) || defined(EDEN_DEV_ROM_ID)
@@ -622,7 +730,7 @@ int main(int argc, char** argv) {
             for (const auto& entry : Eden::ReadNativeDirectory(folder, rom_error)) {
                 const auto filename = entry.path().filename().string();
                 const auto extension = entry.path().extension();
-                if (extension != ".nsp" && extension != ".xci") continue;
+                if (extension != ".nsp" && extension != ".xci" && extension != ".nup") continue;
                 const auto path = folder + "/" + filename;
                 if (filename.find(development_id) != std::string::npos ||
                     eden_game_title_id(path.c_str()) == development_title) {
@@ -665,8 +773,14 @@ int main(int argc, char** argv) {
         launch_error.clear();
         if (!rooms.BeginGame()) throw std::runtime_error("Join a room successfully or leave it before starting a game.");
         SCOPE_EXIT { rooms.EndGame(); };
+#if defined(EDEN_DEV_PROFILE) || defined(EDEN_MKW_DIAGNOSTICS)
+        // The timers these builds' reports read (EDEN_DEV_ lines, EDEN_GUEST_RUN, the MKW timers);
+        // off elsewhere, where a Timer is one look at the flag (performance.h timers_on).
+        Eden::Performance::timers_on = true;
+#endif
 #ifdef EDEN_DEV_VULKAN
         Eden::Performance::vulkan_cost_enabled = std::filesystem::exists(Eden::AppFile("cost-run.txt"));
+        if (Eden::Performance::vulkan_cost_enabled) Eden::Performance::timers_on = true;  // a cost run
         const bool performance_run = std::filesystem::exists(Eden::AppFile("performance-run.txt"));
 #ifdef EDEN_DEV_PROFILE
         Eden::Performance::texture_budget_log = true;  // EDEN_VULKAN_TEXTURE_BUDGET every 300 frames
@@ -710,7 +824,8 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Vulkan is not available in this build yet. Select OpenGL in Settings > Video to play.");
 #endif
         Eden::Report("launch", Eden::BackendName(backend));
-        const bool game = std::filesystem::is_regular_file(selected_game);
+        const bool game = (held_nup && selected_game == held_nup->Path()) ||
+                          std::filesystem::is_regular_file(selected_game);
         if (!game) throw std::runtime_error("Selected ROM is no longer available");
         const char* guest = selected_game.c_str();
         // The audio and the renderer read this game's own settings (Library > Game settings).
@@ -815,8 +930,8 @@ int main(int argc, char** argv) {
         #ifdef EDEN_PS5_OPENGL
         Settings::values.renderer_backend = backend == Eden::GraphicsBackend::Vulkan ?
             Settings::RendererBackend::Vulkan : Settings::RendererBackend::OpenGL_GLSL;
-        // Keep emulator threads off guest cores 0-2 and their SMT siblings (Vulkan):
-        // +17% in the heaviest measured window of a racing game.
+        // Keep emulator threads off the pinned guest-core and GPU CPUs and the GPU thread's SMT
+        // sibling (Vulkan; performance.cpp CheckWorkerTopology).
         Eden::Performance::SetSecondaryPlacement(backend == Eden::GraphicsBackend::Vulkan);
         // A32 fastmem window (direct JIT accesses to aliased guest memory): opt-in with dev-settings
         // fastmem=on; on the console it is slower than the page-table path.
@@ -852,6 +967,8 @@ int main(int argc, char** argv) {
         Settings::values.memory_layout_mode = Settings::MemoryLayout::Memory_4Gb;
         // A development run that names jit_list in dev-settings decides the block list by itself.
         [[maybe_unused]] bool dev_block_list = false;  // read where a session applies its settings
+        [[maybe_unused]] bool dev_astc_cpu = false;   // dev-settings astc=cpu
+        [[maybe_unused]] bool dev_astc_full = false;  // dev-settings astc_textures=full
 #ifdef EDEN_DEV_PROFILE
         // One-run A/B switches written by the development runner; absent = defaults.
         {
@@ -866,9 +983,28 @@ int main(int argc, char** argv) {
                 } else if (entry.starts_with("cache_spin=")) {
                     // try_lock retries before a guest core sleeps on a GPU cache lock (0 = upstream).
                     Eden::Performance::cache_lock_spins = static_cast<unsigned>(std::strtoul(entry.c_str() + 11, nullptr, 10));
+                } else if (entry.starts_with("cpu_write_ahead=")) {
+                    // Buffer pages after a tracked write marked CPU-modified with it (performance.h).
+                    Eden::Performance::cpu_write_ahead = static_cast<unsigned>(std::min(256UL, std::strtoul(entry.c_str() + 16, nullptr, 10)));
+                } else if (entry == "cpu_write_defer=off") {
+                    // Guest writes wait for a GPU cache lock the GPU thread holds, as upstream (performance.h).
+                    Eden::Performance::cpu_write_defer = false;
+                } else if (entry == "cpu_read_skip=on") {
+                    // Reads skip the download check while a guest write holds the texture cache lock.
+                    Eden::Performance::cpu_read_skip = true;
+                } else if (entry == "dma_batch=off") {
+                    // One engine call per GPU command word, as upstream (performance.h dma_batch).
+                    Eden::Performance::dma_batch = false;
+                    std::printf("EDEN_DEV_DMA_BATCH 0\n");
+                } else if (entry == "timers=off") {
+                    // No Timer counts (EDEN_DEV_ lines read 0): what the timers cost a development build.
+                    Eden::Performance::timers_on = false;
                 } else if (entry == "gc_dirty=upstream") {
                     // Eden's rule: evict GPU-written textures from the "expected" memory mark on.
                     Eden::Performance::gc_keep_dirty = false;
+                } else if (entry == "gc_scan=upstream") {
+                    // Eden's rule: the collector's budget counts visits, not evictions.
+                    Eden::Performance::gc_count_visits = true;
                 } else if (entry.starts_with("dispatch_draws=")) {
                     // Draws between Vulkan worker hand-offs: a power of two from 8 (upstream) to 512.
                     const unsigned long draws = std::strtoul(entry.c_str() + 15, nullptr, 10);
@@ -877,6 +1013,26 @@ int main(int argc, char** argv) {
                 } else if (entry.starts_with("idle_spin_us=")) {
                     // Guest cores spin this long on their interrupt flag before sleeping (W1).
                     Eden::Performance::idle_spin_iterations = static_cast<unsigned>(std::stoul(entry.substr(13)) * 50);
+                } else if (entry == "guest_clock=off") {
+                    // The guest tick counter keeps the clock's rate when frames are late (guest_clock.h).
+                    Eden::GuestClock::enabled = false;
+                } else if (entry.starts_with("compose_delay_us=")) {
+                    // Guest vsync signalled first, composition N us later (VI conductor; 0 = upstream).
+                    Eden::Performance::compose_delay_us = std::stoi(entry.substr(17));
+                } else if (entry.starts_with("kspin=")) {
+                    // PAUSEs a contended guest kernel spin lock spins before it sleeps (Eglantine's
+                    // KSpinLock, EDEN_PS5_KSPIN; 2048 by default). Read at the first contended lock.
+                    setenv("EDEN_PS5_KSPIN", entry.substr(6).c_str(), 1);
+                } else if (entry.starts_with("pin=") && entry.find(':') != std::string::npos) {
+                    // A secondary thread on one CPU: pin=GPUBack:12 (performance.cpp PlaceSecondary).
+                    const auto colon = entry.find(':');
+                    setenv(("EDEN_PIN_" + entry.substr(4, colon - 4)).c_str(), entry.substr(colon + 1).c_str(), 1);
+                } else if (entry.starts_with("back_cpu=")) {
+                    // The split GPU thread's back pinned to this CPU (performance.cpp PlaceSecondary).
+                    setenv("EDEN_BACK_CPU", entry.substr(9).c_str(), 1);
+                } else if (entry.starts_with("secondary_mask=")) {
+                    // The CPUs secondary threads share, in hex (performance.cpp PlaceSecondary).
+                    setenv("EDEN_SECONDARY_MASK", entry.substr(15).c_str(), 1);
                 } else if (entry.starts_with("pc_core=") && entry.size() == 9 && entry[8] >= '0' && entry[8] <= '3') {
                     // Host PC samples from this guest core instead of core 0 (with --pc-sample).
                     Eden::Performance::pc_sample_core = static_cast<unsigned>(entry[8] - '0');
@@ -924,6 +1080,8 @@ int main(int argc, char** argv) {
                     Eden::DevVulkan::robustness2 = true;
                 } else if (entry == "vertex_input_dynamic=off") {
                     Settings::values.vertex_input_dynamic_state.SetValue(false);
+                } else if (entry == "static_vi=off") {
+                    Eden::DevVulkan::static_vertex_input = false;
                 } else if (entry == "pipeline_trace=on") {
                     Eden::DevVulkan::trace_pipelines = true;
                 } else if (entry.starts_with("radv_debug=")) {
@@ -954,8 +1112,21 @@ int main(int argc, char** argv) {
                     Eden::DevVulkan::gpu_time = true;
                 } else if (entry == "submit_sync=on") {
                     Eden::DevVulkan::sync_submissions = true;
+                } else if (entry == "astc=gpu") {
+                    // The default (ASTC decoded on the GPU); kept so older run settings still parse.
                 } else if (entry == "astc=cpu") {
-                    Settings::values.accelerate_astc.SetValue(Settings::AstcDecodeMode::Cpu);
+                    // ASTC decoded on the CPU in the draw that uploads it (to compare with the GPU path).
+                    dev_astc_cpu = true;
+                } else if (entry == "astc_textures=full") {
+                    // ASTC decoded at full quality instead of kept as BC3 (see the video settings below).
+                    dev_astc_full = true;
+                } else if (entry == "tex_partial=off") {
+                    // The core's own partial texture refresh bound (16 MiB) instead of 1 MiB (texture_partial.h).
+                    Eden::Performance::tex_partial = false;
+                } else if (entry == "tex_partial_check=on") {
+                    Eden::Performance::tex_partial_check = true;
+                } else if (entry.starts_with("tex_partial_kb=")) {
+                    Eden::Performance::tex_partial_min = std::strtoull(entry.c_str() + 15, nullptr, 10) << 10;
                 } else if (entry == "log=render") {
                     // Renderer debug logging for crash probes (fetched every few seconds).
                     Common::Log::Filter filter;
@@ -1041,11 +1212,33 @@ int main(int argc, char** argv) {
             static_assert(std::size(filters) == std::size(Eden::kUpscalingFilterKeys));
             // Settings > Video, with what the game does differently (Library > Game settings > Video).
             const auto video = Eden::PreferencesFor(eden_game_title_id(guest));
+            // Settings > Video > Skip game anti-aliasing (video_core/oot_network.h): read by the core
+            // at each dispatch of a game's network.
+            setenv("EDEN_OOT_ANTI_ALIASING", video.skip_game_aa ? "skip" : "game", 1);
             const int resolution = video.resolution;
             const int filter = video.upscaling_filter;
             Settings::values.resolution_setup.SetValue(resolutions[resolution]);
             Settings::values.scaling_filter.SetValue(filters[filter]);
             Settings::UpdateRescalingInfo();
+            // ASTC textures are kept as BC3 (ProsperoEden). The console's GPU has no ASTC, so Eden
+            // holds such a texture decoded, at four bytes a pixel; BC3 takes one. A large open-world
+            // game has two texture arrays of 121 layers in that format: 816 MiB decoded, 204 MiB as
+            // BC3. At 2x, where every render target also has a copy four times its size, that was the
+            // memory a session ran out of within a minute of play, and with BC3 it did not; the GPU
+            // thread's time for a frame was the same either way. At 1x it took longer and ended the
+            // same way. So at every resolution, and for Switch 1 titles too (the core already picks BC3
+            // for a Switch 2 title on a GPU with less than a 12 GiB budget). dev-settings
+            // astc_textures=full keeps them decoded.
+            Settings::values.astc_recompression.SetValue(dev_astc_full ? Settings::AstcRecompression::Uncompressed
+                                                                       : Settings::AstcRecompression::Bc3);
+            // Kept as BC3, a texture decoded on the CPU is decoded inside the draw that first uses it,
+            // with both GPU caches locked: 130 to 290 ms for a draw, three seconds for a texture array
+            // of 121 layers. On another thread (CpuAsynchronous) no frame waits, but the texture is
+            // black or missing until it lands. So the GPU decodes it (and compresses it to BC1/BC3 on
+            // Vulkan) in the frame that uploads it: no such waits, the same frame rate and worst
+            // frames (ProsperoEden runs/astc-*, 2026-11-02). dev-settings astc=cpu decodes on the CPU.
+            Settings::values.accelerate_astc.SetValue(dev_astc_cpu ? Settings::AstcDecodeMode::Cpu
+                                                                   : Settings::AstcDecodeMode::Gpu);
 #ifdef EDEN_PS5_FRAMEGEN
             // Lossless Scaling frame generation (EDEN_PS5_FRAMEGEN, headless/vulkan.cmake).
             // Settings > Video's switch, or the game's own in Library > Triangle > Video, asks
@@ -1169,21 +1362,6 @@ int main(int argc, char** argv) {
             // Mods): Eden's patch manager skips the names in this list. With the Library's Mods
             // switch off for the game, every one of them is in it.
             const u64 title = eden_game_title_id(guest);
-            {
-                // Donkey Kong Bananza's update needs its HMMA compute shaders expanded in software
-                // (patch 0009); other titles keep skipping them, as Mario Kart World's frame rate
-                // was measured. A value from env.txt wins.
-                static bool soft_hmma_by_port = false;
-                if (title == 0x040074A01BF12000ULL) {
-                    if (std::getenv("EDEN_NX2_SOFT_HMMA") == nullptr) {
-                        setenv("EDEN_NX2_SOFT_HMMA", "1", 1);
-                        soft_hmma_by_port = true;
-                    }
-                } else if (soft_hmma_by_port) {
-                    unsetenv("EDEN_NX2_SOFT_HMMA");
-                    soft_hmma_by_port = false;
-                }
-            }
             const auto all_mods = Eden::Mods::List(Eden::AssetsPath("mods"), title);
             auto mods_off = Eden::LoadDisabledMods(title);
             if (!Eden::LoadModsEnabled(title)) {
@@ -1275,7 +1453,8 @@ int main(int argc, char** argv) {
             const auto controls = Eden::PreferencesFor(game_title);
             Settings::values.vibration_enabled.SetValue(controls.vibration);
             pad->SetMapping(controls.mapping);
-            Eden::Report("launch", (std::string("Controls: vibration ") + (controls.vibration ? "on" : "off") +
+            Eden::Report("launch", (std::string("Controls: vibration ") +
+                                    (controls.vibration ? std::to_string(controls.vibration_strength) + "%" : "off") +
                                     ", buttons " + (controls.mapping == Eden::kDefaultMapping ? std::string("as usual") :
                                     Eden::Settings::MappingJson(controls.mapping).dump())).c_str());
             // One Pro Controller per signed-in user's DualSense; later changes apply mid-game.
@@ -1291,16 +1470,17 @@ int main(int argc, char** argv) {
                 player.connected = handheld ? false : index == 0 || (connected & (1u << index)) != 0;
                 player.controller_type = handheld ? Settings::ControllerType::ProController :
                                                     Eden::ControllerSetting(controls.controller);
-                // DualSense rumble (headless/pad.cpp) at Eden's full strength.
+                // DualSense rumble (headless/pad.cpp) at the strength of Settings > Controls: Eden
+                // scales what the game asks for by it (emulated_controller.cpp).
                 player.vibration_enabled = true;
-                player.vibration_strength = 100;
+                player.vibration_strength = controls.vibration_strength;
             }
             {
                 auto& player = Settings::values.players.GetValue()[8];  // Eden's handheld controller
                 player.connected = handheld;
                 player.controller_type = Settings::ControllerType::Handheld;
                 player.vibration_enabled = true;
-                player.vibration_strength = 100;
+                player.vibration_strength = controls.vibration_strength;
             }
             if (controls.controller >= 0)
                 Eden::Report("launch", (std::string("Controller type: ") +
@@ -1349,6 +1529,8 @@ int main(int argc, char** argv) {
             }
 #endif
             Core::System system;
+            if (held_nup && selected_game == held_nup->Path())
+                system.SetFilesystem(std::make_shared<emuhub_direct_nup::HeldNupFilesystem>(held_nup));
             SCOPE_EXIT { game_contents.ClearAllEntries(); };
             passed("core_constructed");
 #ifdef EDEN_PS5_OPENGL
@@ -1408,11 +1590,8 @@ int main(int argc, char** argv) {
                     .applet_id = Service::AM::AppletId::Application,
                 };
 #ifdef PS5_NATIVE
-                // While a game loads nothing else reads the controller, so Touchpad + L1 did nothing
-                // until the game ran: a load that hung could only be left by closing EglantinePS5.
-                // Now it is heard here too. The stop limit starts at the press (stop_limit.h): a
-                // load that finishes within it ends as a normal stop, one that does not ends with
-                // the app starting again at the launcher.
+                // Poll the EmuHub menu while loading as well. Only a visible menu and
+                // deliberate Return confirmation may request a game stop.
                 std::atomic<bool> left_while_loading{false};
                 std::jthread load_watch;
                 if (pad && game) load_watch = std::jthread([&](std::stop_token stop) {
@@ -1427,7 +1606,7 @@ int main(int argc, char** argv) {
                         const bool asked = false;
 #endif
                         if (pad->TakeReturnToMenu() || asked) {
-                            Eden::Report("exit", "Touchpad + L1 while the game loads: leaving as soon as it can be stopped");
+                            Eden::Report("exit", "Confirmed EmuHub menu return while loading");
                             Eden::StopLimit::Begin();
                             left_while_loading = true;
                             break;
@@ -1594,6 +1773,9 @@ int main(int argc, char** argv) {
                 // The blocks this game compiled in earlier sessions, compiled ahead on a spare CPU.
                 if (std::filesystem::exists(Eden::AppFile("block-list.txt"))) Eden::JitList::enabled = true;
                 Eden::JitList::Session jit_list;
+                [[maybe_unused]] std::string fastmem64_sites;  // the title's demoted 64-bit fastmem sites (cache/jit)
+                [[maybe_unused]] u64 fastmem64_code_start = 0, fastmem64_code_size = 0;
+                [[maybe_unused]] unsigned char fastmem64_build[32]{};
                 if (auto* process = system.ApplicationProcess()) {
                     Eden::JitList::BuildId build{};
                     const auto& id = system.GetApplicationProcessBuildID();
@@ -1610,6 +1792,22 @@ int main(int argc, char** argv) {
                         code_end = info.m_address + info.m_size;
                     }
                     jit_list.Start(system.GetApplicationProcessProgramID(), build, code_start, code_end - code_start);
+#ifdef PS5_NATIVE
+                    // The 64-bit fastmem window's demoted sites from earlier sessions (fastmem-callback.cmake).
+                    if (Eden::Fastmem::Window64Base() != 0 && eden_fastmem64_load_sites) {
+                        char name[64];
+                        std::snprintf(name, sizeof(name), "/cache/jit/%016llX.fastmem64-sites",
+                                      static_cast<unsigned long long>(system.GetApplicationProcessProgramID()));
+                        (void)mkdir((Eden::UserDir() + "/cache").c_str(), 0777);
+                        (void)mkdir((Eden::UserDir() + "/cache/jit").c_str(), 0777);
+                        fastmem64_sites = Eden::UserDir() + name;
+                        fastmem64_code_start = code_start;
+                        fastmem64_code_size = code_end - code_start;
+                        std::memcpy(fastmem64_build, build.data(), std::min(sizeof(fastmem64_build), build.size()));
+                        std::printf("EDEN_FASTMEM64 sites_loaded=%zu\n",
+                                    eden_fastmem64_load_sites(fastmem64_sites.c_str(), fastmem64_code_start, fastmem64_build));
+                    }
+#endif
                 }
                 Eden::TakeGuestFault(); // Nothing from an earlier session belongs to this one.
                 Eden::Loading::Set(Eden::Loading::Step::starting);
@@ -1621,6 +1819,40 @@ int main(int argc, char** argv) {
                     if (!running || !running->IsPoweredOn()) return 0;
                     auto* const process = running->ApplicationProcess();
                     return process ? process->GetUsedUserPhysicalMemorySize(running->Kernel()) : 0;
+                });
+                Eden::Performance::guest_pool_report.store([] {
+                    auto* const running = reporting_system;
+                    if (!running || !running->IsPoweredOn()) return;
+                    auto& kernel = running->Kernel();
+                    struct PoolRegion { const char* name; u32 type; };
+                    static constexpr PoolRegion pools[] = {
+                        {"application", static_cast<u32>(Kernel::KMemoryRegionType_DramApplicationPool.GetValue())},
+                        {"applet", static_cast<u32>(Kernel::KMemoryRegionType_DramAppletPool.GetValue())},
+                        {"system_nonsecure", static_cast<u32>(Kernel::KMemoryRegionType_DramSystemNonSecurePool.GetValue())},
+                        {"system", static_cast<u32>(Kernel::KMemoryRegionType_DramSystemPool.GetValue())},
+                    };
+                    char line[512];
+                    int length = std::snprintf(line, sizeof(line), "EDEN_GUEST_POOLS");
+                    std::size_t outside = 0;
+                    for (const auto& pool : pools) {
+                        std::size_t held = 0, span = 0;
+                        for (const auto& region : kernel.MemoryLayout().GetPhysicalMemoryRegionTree()) {
+                            if (!region.IsDerivedFrom(pool.type)) continue;
+                            span += region.GetSize();
+                            held += ::Common::GuestMemoryHeldIn(region.GetAddress() - Core::DramMemoryMap::Base, region.GetSize());
+                        }
+                        // (Not the kernel's free size: its pool lock needs a guest thread.)
+                        outside += held;
+                        if (length > 0 && static_cast<std::size_t>(length) < sizeof(line))
+                            length += std::snprintf(line + length, sizeof(line) - length, " %s=held:%zu/span:%zu",
+                                                    pool.name, held >> 20, span >> 20);
+                    }
+                    std::size_t guest_span = 0, guest_held = 0;
+                    ::Common::GuestMemoryUsage(&guest_span, &guest_held);
+                    if (length > 0 && static_cast<std::size_t>(length) < sizeof(line))
+                        std::snprintf(line + length, sizeof(line) - length, " other_held=%zu (MiB)\n",
+                                      (guest_held > outside ? guest_held - outside : 0) >> 20);
+                    std::fputs(line, stderr);
                 });
                 system.Run();
 #if defined(EDEN_DEV_PROFILE) && defined(PS5_NATIVE)
@@ -1978,6 +2210,12 @@ int main(int argc, char** argv) {
                 // A game that ended itself or failed is being stopped too (stop_limit.h).
                 Eden::StopLimit::Begin();
                 jit_list.Finish();  // while the JITs still exist: their block list is saved
+#ifdef PS5_NATIVE
+                if (!fastmem64_sites.empty() && eden_fastmem64_save_sites)
+                    std::printf("EDEN_FASTMEM64 sites_saved=%zu\n",
+                                eden_fastmem64_save_sites(fastmem64_sites.c_str(), fastmem64_code_start,
+                                                          fastmem64_code_size, fastmem64_build));
+#endif
                 // Shutdown requests cancellation before suspending cores; Pause can
                 // block while a CPU producer is waiting on a full GPU queue.
                 Eden::ReportStep("shutdown", "Stopping the game");

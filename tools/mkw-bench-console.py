@@ -16,6 +16,10 @@ settings, save and caches are restored and verified at the end.
 
 --variant LABEL|NAME=VALUE|...: env.txt lines; '@key=value' sets the title's performance
 setting (e.g. @fast_gpu=true). Without --variant one default variant runs.
+--events SECONDS:ACTION,...: pad input after the game has loaded (the build must take runner
+input: EDEN_SCRIPTED_INPUT=ON, not a development build). ACTION is a button (a, b, lr = L and R
+together, plus) with an optional hold in ms (a3000), or shot for a screenshot; e.g.
+'35:lr,45:lr,55:a,60:a,...' leaves the title screen and walks the menus into a race.
 --cache warm (default) primes the caches once with an unmeasured run, then keeps them;
 --cache cold clears them before every run.
 Candidates must be input-enabled builds (EDEN_SCRIPTED_INPUT=ON) so runs can return to the
@@ -39,6 +43,7 @@ base = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(base)
 helpers = base.helpers
 TITLE = base.TITLE.upper()
+BUTTONS = {'a': 0x2000, 'b': 0x4000, 'plus': 0x0008, 'lr': 0x0C00}
 LOG_FILTER = 'EDEN_LOG_FILTER=*:Warning Render.Vulkan:Info\n'
 FRAME = re.compile(r'EDEN_VULKAN_FRAME frames=(\d+) seconds=([\d.]+) fps=([\d.]+) worst_ms=([\d.]+) total=(\d+)')
 GC = re.compile(r'MKW_GC frame=(\d+) usage=(\d+) expected=(\d+) critical=(\d+)')
@@ -154,6 +159,15 @@ class Bench(base.CacheConsole):
         data = self.get(self.data + '/logs/boot-trace.txt', True)
         return data.splitlines()[0] if data else b''
 
+    def act(self, action, elapsed):
+        if action == 'shot':
+            self.screenshot(f'shot-{elapsed:05.0f}s')
+            return
+        name = re.match(r'[a-z]+', action)[0]
+        duration = min(int(action[len(name):] or 200), 3000)
+        command = f'{time.time_ns()} {BUTTONS[name]} {duration} 128 128 128 128\n'
+        self.put(self.app + '/compat-input.txt', command.encode())
+
     def measure(self, label, candidate, variant, seconds):
         self.deploy(candidate)
         self.stop()
@@ -175,9 +189,16 @@ class Bench(base.CacheConsole):
         start = time.monotonic()
         loaded_at = crash = None
         shots = []
+        events = list(self.args.events) if label != 'prime' else []
+        last_check = 0.0
         while time.monotonic() - start < seconds:
-            time.sleep(10)
+            time.sleep(1 if events and loaded_at is not None else 10)
             elapsed = time.monotonic() - start
+            while events and loaded_at is not None and elapsed - loaded_at >= events[0][0]:
+                self.act(events.pop(0)[1], elapsed)
+            if elapsed - last_check < 10:
+                continue
+            last_check = elapsed
             crashes = self.new_crashes()
             if crashes or self.boot_line() != boot:
                 crash = {'seconds_after_launch': round(elapsed), 'names': crashes}
@@ -260,6 +281,8 @@ def main():
     parser.add_argument('--variant', action='append', default=[])
     parser.add_argument('--runs', type=int, default=2)
     parser.add_argument('--seconds', type=int, default=240)
+    parser.add_argument('--events', default='', type=lambda text: sorted(
+        (float(item.partition(':')[0]), item.partition(':')[2]) for item in text.split(',') if item))
     parser.add_argument('--resolution', choices=('0.5x', '0.75x', '1x'), default='0.5x')
     parser.add_argument('--cache', choices=('warm', 'cold'), default='warm')
     parser.add_argument('--warmup-frames', type=int, default=800)

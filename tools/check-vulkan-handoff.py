@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Run generated scheduler handoff methods against a blocking command fixture."""
+"""Run the scheduler's handoff methods (Eglantine/) against a blocking command fixture."""
 from pathlib import Path
 import subprocess
 import tempfile
 import sys
 root = Path(__file__).resolve().parents[1]
-generated = Path(sys.argv[1]) if len(sys.argv) > 1 else Path((root / '.local/headless-cache').read_text().strip()) / 'native-local/headless'
-source = (generated / 'vulkan_scheduler.cpp').read_text()
-header = (generated / 'include/video_core/renderer_vulkan/vk_scheduler.h').read_text()
+from eglantine_source import source as eglantine_source  # the core, part of this repository
+source = eglantine_source('src/video_core/renderer_vulkan/vk_scheduler.cpp')
+header = eglantine_source('src/video_core/renderer_vulkan/vk_scheduler.h')
 assert 'std::condition_variable drain_cv;' in header and 'unsigned drain_waiters{};' in header
 
 def method(name):
@@ -42,12 +42,15 @@ struct MkwWorkerTimer {};
 namespace VideoCommon {
 namespace LoadingProbe { struct Probe { void Mark(const char*) {} }; inline Probe gpu; }
 namespace GpuSplit { inline bool check_owner{}; inline void CheckOwner(const char*) {} }
+namespace StutterTrace { enum class Thread { Worker }; struct ThreadScope { explicit ThreadScope(Thread) {} }; }
+namespace Nx2Profile { enum class Zone { WorkerIdle }; struct Scope { explicit Scope(Zone) {} }; inline void Report(const char*) {} }
 }
 namespace Common {
 enum class ThreadPriority { Critical };
 void SetCurrentThreadName(const char*) {}
 void SetCurrentThreadPriority(ThreadPriority) {}
 void SetCurrentThreadToPerformanceCores() {}
+namespace DkbCpuTrace { enum class Role { VulkanWorker }; struct Registration { explicit Registration(Role) {} }; }
 }
 struct Event : std::condition_variable_any {
     unsigned notifications{};
@@ -82,6 +85,8 @@ struct Scheduler {
     void WorkerThread(std::stop_token);
     void AcquireNewChunk() { chunk = std::make_unique<CommandChunk>(); }
     void AllocateWorkerCommandBuffer() {}
+    bool uploads_pending{};   // the upload batching of this core's scheduler: nothing to batch here
+    void FlushUploads() {}
 };
 '''
 code += '\n'.join(method(name) for name in ['WaitWorker', 'DispatchWork', 'WorkerThread'])

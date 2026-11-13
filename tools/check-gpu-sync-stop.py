@@ -1,7 +1,8 @@
 from pathlib import Path
 import subprocess,tempfile,re
+from eglantine_source import EGLANTINE, source as eglantine_source  # the core, part of this repository
 r=Path(__file__).resolve().parents[1];c=Path((r/'.local/headless-cache').read_text().strip())
-t=(c/'native-local/headless/gpu.cpp').read_text()
+t=eglantine_source('src/video_core/gpu.cpp')
 def method(start,end): return t[t.index(start):t.index(end,t.index(start))]
 methods=method('    template <typename Func>','    [[nodiscard]] u64 GetTicks()')+method('    void NotifyShutdown()', '    /// Obtain the CPU Context')
 code=r'''
@@ -15,12 +16,14 @@ code=r'''
 #include <semaphore>
 #include <thread>
 using u64=unsigned long long;
-struct Worker {std::thread t;std::atomic_bool stopping{};void Stop(){stopping=true;if(t.joinable())t.join();}void TickGPU(bool){}void InvalidateReadbackCache(){}};
+// TickWork ends a fast draw chain (video_core/nx2_fast_draw.h); nothing to chain here.
+namespace VideoCommon::Nx2FastDraw {enum class Reason{TickWork};inline void Break(Reason){}}
+struct Worker {std::thread t;std::atomic_bool stopping{};void Stop(){stopping=true;if(t.joinable())t.join();}void NotifyShutdown(){Stop();}void TickGPU(bool){}void InvalidateReadbackCache(){}};
 struct GPU {
  std::mutex sync_request_mutex,sync_mutex;
  std::condition_variable sync_request_cv,sync_cv;
  std::list<std::function<void()>> sync_requests;
- bool sync_requests_stopped{},is_async=true;
+ bool sync_requests_dropped{},is_async=true;
  std::atomic_bool shutting_down{};
  std::atomic<u64> current_sync_fence{};u64 last_sync_fence{};
  Worker gpu_thread;
@@ -56,8 +59,8 @@ with tempfile.TemporaryDirectory() as tmp:
  subprocess.run(['g++','-std=c++20','-pthread','-fsanitize=address,undefined','-g',str(p/'test.cpp'),'-o',str(p/'test')],check=True)
  subprocess.run([str(p/'test')],check=True,timeout=10)
 print('Actual GPU sync methods: cancelled/pending/active requests, callback lifetime, repeated shutdown PASS')# Execute the actual in-flight wait code with absent signals and shutdown.
-dma=(c/'native-local/headless/dma_pusher.cpp').read_text()
-puller=(c/'native-local/headless/engines_puller.cpp').read_text()
+dma=eglantine_source('src/video_core/dma_pusher.cpp')
+puller=eglantine_source('src/video_core/engines/puller.cpp')
 wait=re.split(r'    if \(signal_sync(?: && !synced)?\) \{',dma,maxsplit=1)[1].split('        signal_sync = false;',1)[0]
 acquire=puller.split('void Puller::ProcessSemaphoreAcquire(DmaPusher& dma_pusher) {',1)[1].split('\n}\n',1)[0]
 code=r'''
@@ -78,7 +81,10 @@ bool Wait(){
 struct Memory {std::atomic<u32> value{};template<class T>T Read(unsigned){return value.load();}};
 struct Raster {std::atomic_uint calls{};void ReleaseFences(){++calls;}};
 struct DmaPusher {System system;Memory memory_manager;Raster raster;Raster*rasterizer=&raster;};
-struct Puller {struct Regs {struct Address{unsigned SemaphoreAddress(){return 0;}}semaphore_address;u32 semaphore_acquire=4,acquire_value{};bool acquire_active{},acquire_mode{},acquire_source{};}regs;
+namespace VideoCommon::Nx2FastDraw{enum class Reason{Fence};inline void Break(Reason){}} // ends a fast draw chain
+struct Puller {void BreakFastDrawAtAcquire(){}
+void ReleaseFences(DmaPusher&d){d.rasterizer->ReleaseFences();}
+struct Regs {struct Address{unsigned SemaphoreAddress(){return 0;}}semaphore_address;u32 semaphore_acquire=4,acquire_value{};bool acquire_active{},acquire_mode{},acquire_source{};}regs;
 void ProcessSemaphoreAcquire(DmaPusher&dma_pusher){
 '''+acquire+r'''
 }};

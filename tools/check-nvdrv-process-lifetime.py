@@ -1,8 +1,9 @@
 """Execute generated session ownership paths; guest heap discovery is outside this check."""
 from pathlib import Path
 import subprocess,tempfile
+from eglantine_source import EGLANTINE, source as eglantine_source  # the core, part of this repository
 r=Path(__file__).resolve().parents[1];cache=Path((r/'.local/headless-cache').read_text().strip())
-s=(cache/'native-local/headless/nvdrv_container.cpp').read_text()
+s=eglantine_source('src/core/hle/service/nvdrv/core/container.cpp')
 opening=s[s.index('SessionId Container::OpenSession'):s.index('    // Optimization')]+ '    return SessionId{new_id};\n}\n'
 closing=s[s.index('void Container::CloseSession'):s.index('Session* Container::GetSession')]
 code=r'''

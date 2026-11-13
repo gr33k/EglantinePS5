@@ -43,7 +43,6 @@ already exists: the dependencies, this checkout's build cache in
 | `make dev DEV_TITLE=<title ID>` | Development build, `build/dev/PPSA98515` (or `EDEN_DEV_PACKAGE_DIR`): profiling counters, `dev-settings.txt` switches, boots the given title |
 | `make test` | Host (Linux) test suites of the port's code (no desktop emulator is built; only the PS5 app is) |
 | `make deps` | Fetch missing dependencies at their pinned revisions |
-| `make update` | Move the Eglantine submodule to the newest commit of its default branch, list what came in, and check that the port's text anchors still match (`tools/prepare-vulkan-port.py --report`) |
 | `make deps-status` | List the dependencies, where they live and whether they match their pins |
 | `make prepare` | Everything besides Eden itself: build cache, FFmpeg, packaging tool, driver stub, RADV |
 | `make toolchain` | Check the host tools |
@@ -79,23 +78,15 @@ Downloads are cached in `~/.cache/eglantineps5-deps` (`EGLANTINEPS5_DEPS_CACHE`)
 
 Inside this repository, in `.deps/`:
 
-- **Eglantine** (the `Eglantine/` submodule, a Switch 2 capable fork of Eden), at the commit the
-  submodule records; `git clone --recurse-submodules`, or `git submodule update --init` after a plain
-  clone. The build copies it into its cache (`tools/sync-eden-source.sh`) and uses Eden's own
-  hash-pinned packages, which its configure step downloads. The PS5 frontend in `headless/` replaces
-  and derives sources at configure time (`headless/inject.cmake`). The submodule
-  references Zortos's core directly; no core backport patch or Bananza terrain-counter
-  workaround is needed. The PS5 memory, loader, JIT and GPU worker adaptations stay
-  in the port's generated-source rules.
-  `tools/apply-eglantine-patches.sh` remains available for optional local patches in
-  `tools/eglantine-patches/`; it is a no-op when there are none. To move to a newer
-  Eglantine, run `make update`, then `make test`, and commit the new submodule reference.
-- **Catch2** at the core's pinned version/hash, fetched by `tools/check-nx2-core.py`
-  into `.local/nx2-core-check` for focused native shader, readback, mapping, command
-  synchronization tests. The two full shader-IR integration
-  tests remain in the core's regular `tests` target. `EDEN_CATCH2_SOURCE` can point
-  at a matching existing Catch2 checkout for offline builds.
-  Console comparison builds can set `env=EDEN_DEV_CAPTURE_EARLY=1` in
+- **Eglantine** (`Eglantine/`, a Switch 2 capable fork of Eden) is part of this repository: it was
+  imported once from Zortos's fork (nx2 babdb6bb75) and is our code since, changed directly in
+  ordinary commits; upstream changes are brought over by hand where we want them
+  (`Eglantine/UPSTREAM.md`). The build copies it into its cache (`tools/sync-eden-source.sh`) and
+  uses Eden's own hash-pinned packages, which its configure step downloads. The PS5 frontend in
+  `headless/` builds around it (`headless/inject.cmake`); the PS5 changes to the core itself are
+  written in `Eglantine/`, behind `#if` conditionals where the host's test build or a build switch
+  needs other code (`Eglantine/UPSTREAM.md`).
+- Console comparison builds can set `env=EDEN_DEV_CAPTURE_EARLY=1` in
   `dev-settings.txt` to honour an explicit `capture-once.txt` request during the
   first minute. This requires a DEV Vulkan build; production builds do not read
   this switch or capture frames automatically.

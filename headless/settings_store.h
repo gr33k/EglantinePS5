@@ -3,14 +3,17 @@
 //
 //   {
 //     "version": 1,
-//     "video": { "renderer": "vulkan", "fps_overlay": true, "resolution": "1x",
+//     "video": { "renderer": "vulkan", "fps_overlay": true, "fps_overlay_size": "regular",
+//                "fps_overlay_corner": "top_left", "fps_overlay_fields": 207, "resolution": "1x",
 //                "upscaling_filter": "bilinear", "refresh_rate": "60",
 //                "output_resolution": "1080p", "frame_gen": false,
 //                "frame_gen_target": "auto", "frame_gen_multiplier": "2" },
 //     "audio": { "volume": 100, "mute": false, "menu_volume": 70 },
-//     "controls": { "vibration": true, "mapping": { "a": "cross", "b": "circle" } },
+//     "controls": { "vibration": true, "vibration_strength": 100,
+//                   "mapping": { "a": "cross", "b": "circle" } },
 //     "system": { "language": "en-US" },
 //     "accessibility": { "large_text": false, "high_contrast": false, "reduce_motion": false },
+//     "launcher": { "theme": "eglantine", "accent": "" },
 //     "diagnostics": { "detailed_logging": false, "immediate_logs": false },
 //     "performance": { "block_list": false, "async_shaders": false, "fast_gpu": false,
 //                      "unsafe_cpu": false, "unsafe_dma": false, "reactive_flushing": true,
@@ -50,6 +53,7 @@
 #include <nlohmann/json.hpp>
 
 #include "button_mapping.h"
+#include "hud.h"
 #include "storage_paths.h"
 #include "multiplayer.h"
 
@@ -96,6 +100,12 @@ static_assert(std::size(kFrameGenMultiplierKeys) == std::size(kFrameGenMultiplie
 inline constexpr const char* kOutputKeys[] = {"1080p", "1440p", "2160p"};
 inline constexpr int kOutputWidth[] = {1920, 2560, 3840};
 inline constexpr int kOutputHeight[] = {1080, 1440, 2160};
+// Settings > Video: the FPS overlay's size and the corner of the picture it stands in, in the
+// launcher's order (hud.h, kHudSizes and kHudCorners). Its fields are saved as their bits
+// (hud.h, kHudField*), which ProsperoEden's launcher saves under the same name.
+inline constexpr const char* kHudSizeKeys[] = {"regular", "medium", "large"};
+inline constexpr const char* kHudCornerKeys[] = {"top_left", "top_right", "bottom_left", "bottom_right"};
+static_assert(std::size(kHudSizeKeys) == kHudSizes && std::size(kHudCornerKeys) == kHudCorners);
 // Settings > Language: the system language games see, in launcher order. Each entry maps to Eden's
 // Settings::Language and to the Settings::Region consoles sold with that language have (indices in
 // Eden's enum order; headless/main.cpp checks them). Eden's older "Chinese" and "Taiwanese" codes
@@ -110,6 +120,17 @@ inline constexpr int kLanguageRegions[] = {1, 2, 2, 1, 2, 2, 2, 1, 2, 1, 2, 2, 2
 static_assert(std::size(kLanguageLabels) == std::size(kLanguageKeys) &&
               std::size(kLanguageSettings) == std::size(kLanguageKeys) &&
               std::size(kLanguageRegions) == std::size(kLanguageKeys));
+// The launcher theme a new install uses: the rose look the launcher always had.
+inline constexpr const char* kDefaultLauncherTheme = "eglantine";
+
+// A theme or accent id as the settings file keeps it: short, lowercase letters, digits and '-'.
+inline bool ValidLauncherId(std::string_view id) {
+    if (id.size() > 32) return false;
+    for (const char c : id)
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')) return false;
+    return true;
+}
+
 struct Preferences {
     bool hud = true;
     int volume = 100;
@@ -125,14 +146,27 @@ struct Preferences {
     int frame_gen_target = 0;            // index into kFrameGenTargetKeys (0 is "auto")
     int frame_gen_multiplier = 0;        // index into kFrameGenMultiplierKeys (0 is 2x)
     bool vibration = true;
+    int vibration_strength = 100;        // percent of what a game asks for: 25, 50, 75 or 100
     int language = 0;                    // index into kLanguageKeys (English (US), Eden's default)
     int menu_volume = 70;                // the launcher's own sounds, 0 (off) to 100
     bool large_text = false;             // Settings > Accessibility: the launcher's look
     bool high_contrast = false;
     bool reduce_motion = false;
+    // Settings > Accessibility: the launcher's theme and its accent preset, by id
+    // (pe/ui/theme.cpp). "" is the theme's own accent; an id this build has not shows the default.
+    std::string theme = kDefaultLauncherTheme;
+    std::string accent;
     ButtonMapping mapping = kDefaultMapping;  // Settings > Controls > Button mapping
     int controller = -1;                 // a game's own Controller type (kControllerKeys); -1: automatic
     bool immediate_logs = false;         // Settings > Diagnostics: log lines written as they come
+    // Settings > Video: the FPS overlay's look. Last, so the lists that fill the fields above in
+    // order keep their meaning.
+    int hud_fields = static_cast<int>(kHudFieldDefault);  // what the overlay shows (hud.h, kHudField*)
+    int hud_size = 0;                    // index into kHudSizeKeys: 1x, 1.5x, 2x
+    int hud_corner = 0;                  // index into kHudCornerKeys: top left first
+    // Settings > Video: skip the anti-aliasing network some games run on tensor cores (Ocarina of
+    // Time's, video_core/oot_network.h) for a plain upscale; off runs the game's own.
+    bool skip_game_aa = true;
 };
 
 inline int KeyIndex(const std::string& value, const char* const* keys, int count, int fallback) {
@@ -147,7 +181,7 @@ inline bool ValidRomFilename(std::string_view name) {
         if (c < 32 || c == 127 || c == '/' || c == '\\') return false;
     std::string extension(name.substr(name.size() - 4));
     for (char& c : extension) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return extension == ".nsp" || extension == ".xci" || extension == ".dir";
+    return extension == ".nsp" || extension == ".xci" || extension == ".nup" || extension == ".dir";
 }
 
 inline std::string SettingsFile() { return ConfigFile("eglantineps5.json"); }
@@ -332,6 +366,14 @@ inline Preferences LoadPreferences(const std::string& file = SettingsFile()) {
     const Json document = Settings::Load(file);
     Preferences result;
     result.hud = Settings::Bool(document, Json::json_pointer("/video/fps_overlay"), result.hud);
+    // A file from before there was a choice names none of these: the overlay then shows what it
+    // showed, with the free memory.
+    const int hud_fields = Settings::Int(document, Json::json_pointer("/video/fps_overlay_fields"), result.hud_fields);
+    if (ValidHudFields(hud_fields)) result.hud_fields = hud_fields;
+    result.hud_size = KeyIndex(Settings::String(document, Json::json_pointer("/video/fps_overlay_size")),
+                               kHudSizeKeys, int(std::size(kHudSizeKeys)), result.hud_size);
+    result.hud_corner = KeyIndex(Settings::String(document, Json::json_pointer("/video/fps_overlay_corner")),
+                                 kHudCornerKeys, int(std::size(kHudCornerKeys)), result.hud_corner);
     result.backend = Settings::String(document, Json::json_pointer("/video/renderer")) == "opengl" ?
         GraphicsBackend::OpenGL : GraphicsBackend::Vulkan;
     const int volume = Settings::Int(document, Json::json_pointer("/audio/volume"), result.volume);
@@ -353,6 +395,7 @@ inline Preferences LoadPreferences(const std::string& file = SettingsFile()) {
     result.output = KeyIndex(Settings::String(document, Json::json_pointer("/video/output_resolution")),
                              kOutputKeys, int(std::size(kOutputKeys)), result.output);
     result.frame_gen = Settings::Bool(document, Json::json_pointer("/video/frame_gen"), result.frame_gen);
+    result.skip_game_aa = Settings::Bool(document, Json::json_pointer("/video/skip_game_aa"), result.skip_game_aa);
     result.frame_gen_type = KeyIndex(Settings::String(document, Json::json_pointer("/video/frame_gen_type")),
                                      kFrameGenTypeKeys, int(std::size(kFrameGenTypeKeys)), result.frame_gen_type);
     result.frame_gen_target = KeyIndex(
@@ -362,12 +405,20 @@ inline Preferences LoadPreferences(const std::string& file = SettingsFile()) {
         Settings::String(document, Json::json_pointer("/video/frame_gen_multiplier")),
         kFrameGenMultiplierKeys, int(std::size(kFrameGenMultiplierKeys)), result.frame_gen_multiplier);
     result.vibration = Settings::Bool(document, Json::json_pointer("/controls/vibration"), result.vibration);
+    // A strength between the steps reads as the step below it; out of range as the nearest end.
+    result.vibration_strength = std::clamp(
+        Settings::Int(document, Json::json_pointer("/controls/vibration_strength"), result.vibration_strength), 25,
+        100) / 25 * 25;
     result.language = KeyIndex(Settings::String(document, Json::json_pointer("/system/language")),
                                kLanguageKeys, int(std::size(kLanguageKeys)), result.language);
     result.large_text = Settings::Bool(document, Json::json_pointer("/accessibility/large_text"), false);
     result.high_contrast = Settings::Bool(document, Json::json_pointer("/accessibility/high_contrast"), false);
     result.reduce_motion = Settings::Bool(document, Json::json_pointer("/accessibility/reduce_motion"), false);
     result.mapping = Settings::Mapping(document, Json::json_pointer("/controls/mapping"), kDefaultMapping);
+    const std::string theme = Settings::String(document, Json::json_pointer("/launcher/theme"));
+    if (!theme.empty() && ValidLauncherId(theme)) result.theme = theme;
+    const std::string accent = Settings::String(document, Json::json_pointer("/launcher/accent"));
+    if (ValidLauncherId(accent)) result.accent = accent;
     return result;
 }
 
@@ -380,16 +431,24 @@ inline bool SavePreferences(const Preferences& value, const std::string& file = 
         value.output < 0 || value.output >= int(std::size(kOutputKeys)) ||
         value.frame_gen_type < 0 || value.frame_gen_type >= int(std::size(kFrameGenTypeKeys)) ||
         value.language < 0 || value.language >= int(std::size(kLanguageKeys)) ||
-        !ValidMapping(value.mapping)) return false;
+        !ValidHudFields(value.hud_fields) || value.hud_size < 0 || value.hud_size >= kHudSizes ||
+        value.hud_corner < 0 || value.hud_corner >= kHudCorners ||
+        value.vibration_strength < 25 || value.vibration_strength > 100 || value.vibration_strength % 25 != 0 ||
+        !ValidMapping(value.mapping) || value.theme.empty() || !ValidLauncherId(value.theme) ||
+        !ValidLauncherId(value.accent)) return false;
     Settings::Json document = Settings::Load(file);
     document["version"] = 1;
     document["video"]["renderer"] = value.backend == GraphicsBackend::Vulkan ? "vulkan" : "opengl";
     document["video"]["fps_overlay"] = value.hud;
+    document["video"]["fps_overlay_fields"] = value.hud_fields;
+    document["video"]["fps_overlay_size"] = kHudSizeKeys[value.hud_size];
+    document["video"]["fps_overlay_corner"] = kHudCornerKeys[value.hud_corner];
     document["video"]["resolution"] = kResolutionKeys[value.resolution];
     document["video"]["upscaling_filter"] = kUpscalingFilterKeys[value.upscaling_filter];
     document["video"]["refresh_rate"] = kRefreshKeys[value.refresh];
     document["video"]["output_resolution"] = kOutputKeys[value.output];
     document["video"]["frame_gen"] = value.frame_gen;
+    document["video"]["skip_game_aa"] = value.skip_game_aa;
     document["video"]["frame_gen_type"] = kFrameGenTypeKeys[value.frame_gen_type];
     document["video"]["frame_gen_target"] = kFrameGenTargetKeys[value.frame_gen_target];
     document["video"]["frame_gen_multiplier"] = kFrameGenMultiplierKeys[value.frame_gen_multiplier];
@@ -397,6 +456,7 @@ inline bool SavePreferences(const Preferences& value, const std::string& file = 
     document["audio"]["mute"] = value.mute;
     document["audio"]["menu_volume"] = value.menu_volume;
     document["controls"]["vibration"] = value.vibration;
+    document["controls"]["vibration_strength"] = value.vibration_strength;
     if (value.mapping == kDefaultMapping) document["controls"].erase("mapping");
     else document["controls"]["mapping"] = Settings::MappingJson(value.mapping);
     document["system"]["language"] = kLanguageKeys[value.language];
@@ -405,6 +465,8 @@ inline bool SavePreferences(const Preferences& value, const std::string& file = 
     document["accessibility"]["large_text"] = value.large_text;
     document["accessibility"]["high_contrast"] = value.high_contrast;
     document["accessibility"]["reduce_motion"] = value.reduce_motion;
+    document["launcher"]["theme"] = value.theme;
+    document["launcher"]["accent"] = value.accent;
     return Settings::Write(document, file);
 }
 

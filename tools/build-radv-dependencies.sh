@@ -44,6 +44,11 @@ bash "$vulkan/tools/build-radv.sh" release
 python3 "$root/tools/patch-radv-wsi.py"
 python3 "$root/tools/patch-radv-disk-cache.py"
 python3 "$root/tools/patch-radv-memory-report.py"
+python3 "$root/tools/patch-radv-pieces.py"
+python3 "$root/tools/patch-radv-trim.py"
+python3 "$root/tools/patch-radv-gs-compute.py"
+# ProsperoEden's patch-radv-transfer-split.py (splitting before transfers and barriers) is not
+# taken: with it, Mario Kart World hung the GPU under memory pressure (PR #77).
 bash "$vulkan/tools/build-radv.sh" release
 sha256sum "$vulkan/.deps/work/radv-src/src/vulkan/wsi/wsi_common_videoout.c" \
     > "$vulkan/.deps/native/radv-release/EDEN_WSI_SHA256"
@@ -52,3 +57,9 @@ python3 "$root/tools/patch-radv-disk-cache.py" --digest \
     > "$vulkan/.deps/native/radv-release/EDEN_DISK_CACHE_SHA256"
 python3 "$root/tools/patch-radv-memory-report.py" --digest \
     > "$vulkan/.deps/native/radv-release/EDEN_MEMORY_REPORT_SHA256"
+python3 "$root/tools/patch-radv-pieces.py" --digest \
+    > "$vulkan/.deps/native/radv-release/EDEN_MEMORY_PIECES_SHA256"
+python3 "$root/tools/patch-radv-trim.py" --digest \
+    > "$vulkan/.deps/native/radv-release/EDEN_MEMORY_TRIM_SHA256"
+python3 "$root/tools/patch-radv-gs-compute.py" --digest \
+    > "$vulkan/.deps/native/radv-release/EDEN_GS_COMPUTE_SHA256"

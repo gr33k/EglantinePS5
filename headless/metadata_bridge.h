@@ -69,4 +69,11 @@ int eden_save_export(uint64_t title_id, char* path, size_t capacity);
 
 #ifdef __cplusplus
 }
+
+#include <memory>
+#include "core/file_sys/vfs/vfs_types.h"
+
+// A direct provider session binds metadata reads to the same held NUP as Core's VFS.
+void eden_bind_direct_nup(const char* path, FileSys::VirtualFile file);
+void eden_clear_direct_nup();
 #endif

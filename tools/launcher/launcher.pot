@@ -61,6 +61,15 @@ msgstr ""
 msgid "About {0} s left"
 msgstr ""
 
+#: pe/ui/settings.cpp
+msgid "ACCENT COLOR"
+msgstr ""
+
+#. Settings > Accessibility row: the theme's highlight colour. The colours' names (Rose, Ocean...) stay as they are.
+#: pe/ui/settings.cpp
+msgid "Accent color"
+msgstr ""
+
 #. Label: which folders the app can read.
 #: pe/ui/browse.cpp
 msgid "ACCESS"
@@ -172,6 +181,14 @@ msgstr ""
 #. An upscaling filter.
 #: settings_store.h
 msgid "Bilinear"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Bottom left"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Bottom right"
 msgstr ""
 
 #. Button hint: move through the list.
@@ -416,6 +433,10 @@ msgstr ""
 #. A DualSense button (the X-shaped one). Name the shape, not the letter.
 #: pe/ui/game_options.cpp
 msgid "Cross"
+msgstr ""
+
+#: pe/ui/theme.cpp
+msgid "Dark rose glass and petal pink."
 msgstr ""
 
 #. A per-game setting that follows the general setting; {0} is its value.
@@ -995,6 +1016,10 @@ msgid "LANGUAGES"
 msgstr ""
 
 #: pe/ui/settings.cpp
+msgid "Large"
+msgstr ""
+
+#: pe/ui/settings.cpp
 msgid "LARGER TEXT"
 msgstr ""
 
@@ -1078,6 +1103,10 @@ msgstr ""
 msgid "Make the menu easier to see and follow."
 msgstr ""
 
+#: pe/ui/settings.cpp
+msgid "Medium"
+msgstr ""
+
 #: pe/ui/browse.cpp
 msgid "Menu sound effects made with ElevenLabs."
 msgstr ""
@@ -1136,6 +1165,10 @@ msgstr ""
 
 #: pe/ui/pairing.cpp, pe/ui/settings.cpp
 msgid "Needs attention"
+msgstr ""
+
+#: pe/ui/theme.cpp
+msgid "Neutral glass, clean and still."
 msgstr ""
 
 #: pe/ui/profiles.cpp
@@ -1373,6 +1406,46 @@ msgstr ""
 #. Setting: the size of the picture sent to the TV (1080p, 1440p or 2160p). Not the same as 'Resolution', which scales the game's own picture (1x, 2x...).
 #: pe/ui/settings.cpp
 msgid "Output resolution"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Overlay corner"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Overlay size"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Overlay: CPU"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Overlay: FPS"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Overlay: free memory"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Overlay: GPU"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Overlay: ping"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Overlay: renderer"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Overlay: speed"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Overlay: worst frame"
 msgstr ""
 
 #. Button hint: jump a page of the list (L1 / R1).
@@ -1624,6 +1697,10 @@ msgstr ""
 
 #: pe/ui/browse.cpp, pe/ui/settings.cpp
 msgid "REGION"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Regular"
 msgstr ""
 
 #: pe/ui/profiles.cpp
@@ -1888,6 +1965,10 @@ msgid "SKIP CPU INVALIDATION"
 msgstr ""
 
 #: pe/ui/settings.cpp
+msgid "Skip game anti-aliasing"
+msgstr ""
+
+#: pe/ui/settings.cpp
 msgid "Skips some checks when a game changes memory the GPU uses: faster, and textures can be stale."
 msgstr ""
 
@@ -2025,6 +2106,10 @@ msgstr ""
 msgid "The game starts when the download is done."
 msgstr ""
 
+#: pe/ui/settings.cpp
+msgid "The highlight and accent color of the theme in use."
+msgstr ""
+
 #: pe/ui/game_options.cpp, pe/ui/multiplayer.cpp, pe/ui/settings.cpp
 msgid "The keyboard could not be opened."
 msgstr ""
@@ -2074,6 +2159,15 @@ msgstr ""
 msgid "The update could not finish"
 msgstr ""
 
+#: pe/ui/settings.cpp
+msgid "THEME"
+msgstr ""
+
+#. Settings > Accessibility row: the launcher's look (its colours). The themes' names (Eglantine, Canopy, Slate) stay as they are.
+#: pe/ui/settings.cpp
+msgid "Theme"
+msgstr ""
+
 #: pe/ui/save_sync.cpp
 msgid "This console and the server both have save data the other does not know. Which one should stay? The other is kept as a backup."
 msgstr ""
@@ -2108,6 +2202,14 @@ msgstr ""
 msgid "To import, copy a Ryujinx folder to ryujinx/ or a save to save-import/{0}/, next to roms/."
 msgstr ""
 
+#: pe/ui/settings.cpp
+msgid "Top left"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Top right"
+msgstr ""
+
 #. The DualSense controller's touch pad, pressed as a button. Use the name players know.
 #: pe/ui/game_options.cpp, pe/ui/settings.cpp
 msgid "Touchpad"
@@ -2116,6 +2218,10 @@ msgstr ""
 #. A DualSense button.
 #: pe/ui/game_options.cpp
 msgid "Triangle"
+msgstr ""
+
+#: pe/ui/theme.cpp
+msgid "Tropical dusk, dark green glass and lime."
 msgstr ""
 
 #: pe/ui/pairing.cpp, pe/ui/remote.cpp, pe/ui/save_sync.cpp, pe/ui/update.cpp
@@ -2233,6 +2339,10 @@ msgstr ""
 
 #: pe/ui/settings.cpp
 msgid "Vibration on"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Vibration strength"
 msgstr ""
 
 #: pe/ui/settings.cpp

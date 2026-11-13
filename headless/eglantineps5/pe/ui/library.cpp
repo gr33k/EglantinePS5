@@ -432,13 +432,13 @@ void Launcher::draw_library(Canvas &c)
     draw_frame(c, tr("Your games"), tr("Select a game to begin"));
 
     // ---- the list ----
-    glass(c, kListPanel, 26.0f, theme::kPanel.with_alpha(0.80f), theme::kPanelEdge.with_alpha(0.55f));
-    text(c, tr("LIBRARY"), 138.0f, baseline(208.0f, 28.0f, theme::kSmall), theme::kSmall,
-         theme::kLimePale, Align::left, 3.0f);
+    glass(c, kListPanel, 26.0f, th().panel.with_alpha(0.80f), th().panel_edge.with_alpha(0.55f));
+    text(c, tr("LIBRARY"), 138.0f, baseline(208.0f, 28.0f, th().size_small), th().size_small,
+         th().accent_pale, Align::left, 3.0f);
     if (count == 0)
     {
         text(c, tr("No ROM files found."), kListPanel.x + kListPanel.w * 0.5f,
-             baseline(488.0f, 38.0f, theme::kText24), theme::kText24, theme::kCopy, Align::center);
+             baseline(488.0f, 38.0f, th().size_text), th().size_text, th().copy, Align::center);
     }
     else
     {
@@ -453,10 +453,10 @@ void Launcher::draw_library(Canvas &c)
         for (int row = library_.first_row(); row <= library_.last_row(); ++row)
         {
             list.push_opacity(library_.row_alpha(row, kRowHeight));
-            plate_rest(c, kListPlate, row_rect(row));
+            plate_rest(c, list_plate(), row_rect(row));
             list.pop_opacity();
         }
-        plate_focus(c, kListPlate,
+        plate_focus(c, list_plate(),
                     {kWindow.x, kWindow.y + library_.cursor() - library_.scroll(), kWindow.w,
                      kRowHeight},
                     1.0f);
@@ -473,12 +473,12 @@ void Launcher::draw_library(Canvas &c)
             {
                 // A game on download sources: where it is or what is happening to it instead of its
                 // format, and its download's progress under its name.
-                Color tone = theme::kMeta;
+                Color tone = th().meta;
                 const std::string state = remote_state(game, &tone);
-                const float taken = text_shrink(c, state, r.x + 730.0f, baseline(r.y, kRowHeight, theme::kSmall),
-                                                theme::kSmall, tone, 200.0f, Align::right);
-                text_fit(c, game.name, r.x + 86.0f, baseline(r.y, kRowHeight, theme::kText24), theme::kText24,
-                         Color::rgb(0xf5e9ed).with_alpha(0.78f), 644.0f - taken - 20.0f);
+                const float taken = text_shrink(c, state, r.x + 730.0f, baseline(r.y, kRowHeight, th().size_small),
+                                                th().size_small, tone, 200.0f, Align::right);
+                text_fit(c, game.name, r.x + 86.0f, baseline(r.y, kRowHeight, th().size_text), th().size_text,
+                         th().row_name.with_alpha(0.78f), 644.0f - taken - 20.0f);
                 const Download *download = download_of(game.key);
                 if (download != nullptr &&
                     (download->state == DownloadState::downloading || download->state == DownloadState::verifying) &&
@@ -488,37 +488,37 @@ void Launcher::draw_library(Canvas &c)
                                                                      static_cast<double>(download->total)),
                                                   0.0f, 1.0f);
                     list.rounded_rect({r.x + 86.0f, r.y + kRowHeight - 14.0f, 560.0f, 4.0f}, 2.0f,
-                                      theme::kPanelEdge.with_alpha(0.22f));
+                                      th().panel_edge.with_alpha(0.22f));
                     list.rounded_rect({r.x + 86.0f, r.y + kRowHeight - 14.0f, std::max(4.0f, 560.0f * done), 4.0f},
-                                      2.0f, theme::kLime);
+                                      2.0f, th().accent);
                 }
             }
             else
             {
-                text_fit(c, game.name, r.x + 86.0f, baseline(r.y, kRowHeight, theme::kText24),
-                         theme::kText24, Color::rgb(0xf5e9ed), 560.0f);
-                text(c, game.format, r.x + 730.0f, baseline(r.y, kRowHeight, theme::kSmall),
-                     theme::kSmall, theme::kMeta, Align::right);
+                text_fit(c, game.name, r.x + 86.0f, baseline(r.y, kRowHeight, th().size_text),
+                         th().size_text, th().row_name, 560.0f);
+                text(c, game.format, r.x + 730.0f, baseline(r.y, kRowHeight, th().size_small),
+                     th().size_small, th().meta, Align::right);
             }
             list.pop_opacity();
         }
         list.pop_clip();
         scrollbar(c, library_, 910.0f, kWindow.y, kWindow.h);
     }
-    text(c, list_position(count > 0 ? library_.selected + 1 : 0, count), 898.0f, baseline(866.0f, 28.0f, theme::kSmall), theme::kSmall,
-         theme::kLimePale, Align::right);
+    text(c, list_position(count > 0 ? library_.selected + 1 : 0, count), 898.0f, baseline(866.0f, 28.0f, th().size_small), th().size_small,
+         th().accent_pale, Align::right);
 
     // ---- the selected game ----
-    glass(c, kDetailPanel, 26.0f, theme::kPanel.with_alpha(0.80f),
-          theme::kPanelEdge.with_alpha(0.55f));
-    text(c, tr("GAME DETAILS"), 1016.0f, baseline(210.0f, 28.0f, theme::kSmall), theme::kSmall,
-         theme::kLimePale, Align::left, 3.0f);
+    glass(c, kDetailPanel, 26.0f, th().panel.with_alpha(0.80f),
+          th().panel_edge.with_alpha(0.55f));
+    text(c, tr("GAME DETAILS"), 1016.0f, baseline(210.0f, 28.0f, th().size_small), th().size_small,
+         th().accent_pale, Align::left, 3.0f);
     const Game *game = count > 0 ? &games_[static_cast<std::size_t>(library_.selected)] : nullptr;
     const float shown = tween::clamp01(detail_.value);
     list.push_opacity(shown);
     list.push_transform(1.0f, 0.0f, 0.0f, 0.0f, (1.0f - shown) * 10.0f * motion());
     text_block(c, game != nullptr ? game->name : tr("No ROM selected"), 1016.0f,
-               baseline(250.0f, 42.0f, theme::kHeading), theme::kHeading, 42.0f, theme::kTitle,
+               baseline(250.0f, 42.0f, th().size_heading), th().size_heading, 42.0f, th().title,
                760.0f, 2);
     if (game != nullptr && game->remote)
         remote_cover(c, game->cover, {1016.0f, 372.0f, 288.0f, 288.0f}, 14.0f, 0.9f);
@@ -527,7 +527,7 @@ void Launcher::draw_library(Canvas &c)
               14.0f, 0.9f);
     if (game == nullptr || game->cover.empty())
         text_shrink(c, game == nullptr ? tr("Select a game") : tr("No cover art"), 1160.0f,
-                    baseline(676.0f, 30.0f, theme::kSmall), theme::kSmall, theme::kMeta, 288.0f,
+                    baseline(676.0f, 30.0f, th().size_small), th().size_small, th().meta, 288.0f,
                     Align::center);
     struct Field
     {
@@ -536,90 +536,90 @@ void Launcher::draw_library(Canvas &c)
         Color color;
     };
     Field fields[] = {
-        {tr("FORMAT"), game != nullptr ? game->format : "-", theme::kValue},
-        {tr("SIZE"), game != nullptr ? game->size : "-", theme::kValue},
+        {tr("FORMAT"), game != nullptr ? game->format : "-", th().value},
+        {tr("SIZE"), game != nullptr ? game->size : "-", th().value},
         {tr("ADD-ONS"),
          game != nullptr ? addons_line(game->addons, game->mods, game->mods_on) : "-",
-         game != nullptr && (!game->addons.empty() || game->mods > 0) ? theme::kLimePale :
-                                                                         theme::kValue},
+         game != nullptr && (!game->addons.empty() || game->mods > 0) ? th().accent_pale :
+                                                                         th().value},
         {tr("LANGUAGE"), game != nullptr ? game->language : "-",
-         game != nullptr && !game->language_note.empty() ? theme::kWarning : theme::kValue},
+         game != nullptr && !game->language_note.empty() ? th().warning : th().value},
     };
     // A game on download sources: what is happening to it and where it is, instead of what it comes
     // with and its language, which are known once it is on the console.
     const bool remote = game != nullptr && game->remote;
     if (remote)
     {
-        Color tone = theme::kValue;
+        Color tone = th().value;
         const std::string state = remote_state(*game, &tone);
         const bool coming = download_of(game->key) != nullptr;
-        fields[2] = {tr("STATE"), coming ? state : std::string{tr("Not on the console")}, coming ? tone : theme::kValue};
+        fields[2] = {tr("STATE"), coming ? state : std::string{tr("Not on the console")}, coming ? tone : th().value};
         std::string sources;
         for (const std::string &name : game->sources)
             sources += (sources.empty() ? "" : ", ") + name;
-        fields[3] = {game->sources.size() == 1 ? tr("SOURCE") : tr("SOURCES"), sources, theme::kValue};
+        fields[3] = {game->sources.size() == 1 ? tr("SOURCE") : tr("SOURCES"), sources, th().value};
     }
     for (int i = 0; i < 4; ++i)
     {
-        const float line = baseline(384.0f + 42.0f * static_cast<float>(i), 30.0f, theme::kSmall);
+        const float line = baseline(384.0f + 42.0f * static_cast<float>(i), 30.0f, th().size_small);
         // The name keeps its size up to 200 wide; the value has the rest of the line.
         const float label =
-            text_shrink(c, fields[i].label, 1336.0f, line, theme::kSmall, theme::kLabel, 200.0f);
+            text_shrink(c, fields[i].label, 1336.0f, line, th().size_small, th().label, 200.0f);
         const float room = 440.0f - label - 16.0f;
         // What a game comes with is said briefly where the whole line does not fit.
-        if (i == 2 && game != nullptr && !remote && text_width(c, fields[i].value, theme::kSmall) > room)
+        if (i == 2 && game != nullptr && !remote && text_width(c, fields[i].value, th().size_small) > room)
             fields[i].value = addons_line(game->addons_short, game->mods, game->mods_on, true);
-        text_shrink(c, fields[i].value, 1776.0f, line, theme::kSmall, fields[i].color, room,
+        text_shrink(c, fields[i].value, 1776.0f, line, th().size_small, fields[i].color, room,
                     Align::right);
     }
     if (game != nullptr && !game->language_note.empty())
         notice(c, game->language_note, 1776.0f, baseline(544.0f, 28.0f, 18.0f), 18.0f,
-               theme::kWarning, 440.0f, true, Align::right);
-    text(c, tr("FILE"), 1336.0f, baseline(574.0f, 30.0f, theme::kSmall), theme::kSmall, theme::kLabel);
+               th().warning, 440.0f, true, Align::right);
+    text(c, tr("FILE"), 1336.0f, baseline(574.0f, 30.0f, th().size_small), th().size_small, th().label);
     text_block(c, game != nullptr ? game->file : "-", 1336.0f,
-               baseline(606.0f, 30.0f, theme::kSmall), theme::kSmall, 30.0f, theme::kValue, 440.0f,
+               baseline(606.0f, 30.0f, th().size_small), th().size_small, 30.0f, th().value, 440.0f,
                3);
     list.pop_transform();
     list.pop_opacity();
 
     // ---- console mode ----
     const bool can_configure = game != nullptr && game->title_id != 0;
-    plate_rest(c, kRowPlate, kModeRow);
+    plate_rest(c, row_plate(), kModeRow);
     text_shrink(c, tr("Console mode"), kModeRow.x + 26.0f,
-                baseline(kModeRow.y, kModeRow.h, theme::kText24), theme::kText24,
-                can_configure ? theme::kValue : theme::kMeta, 256.0f);
+                baseline(kModeRow.y, kModeRow.h, th().size_text), th().size_text,
+                can_configure ? th().value : th().meta, 256.0f);
     if (can_configure)
     {
         const Rect track{1322.0f, kModeRow.y + 8.0f, 420.0f, kModeRow.h - 16.0f};
         const float half = track.w * 0.5f;
-        list.rounded_rect(track, 14.0f, Color::rgb(0x180d0f, 0.75f));
-        plate_focus(c, kNavPlate, {track.x + half * mode_.value + 3.0f, track.y + 3.0f, half - 6.0f,
+        list.rounded_rect(track, 14.0f, th().inset.with_alpha(0.75f));
+        plate_focus(c, nav_plate(), {track.x + half * mode_.value + 3.0f, track.y + 3.0f, half - 6.0f,
                                    track.h - 6.0f},
                     1.0f);
         const float cy = track.y + track.h * 0.5f;
-        const Color docked = gfx::mix(theme::kLimePale, theme::kValue.with_alpha(0.45f), mode_.value);
+        const Color docked = gfx::mix(th().accent_pale, th().value.with_alpha(0.45f), mode_.value);
         const Color handheld =
-            gfx::mix(theme::kValue.with_alpha(0.45f), theme::kLimePale, mode_.value);
+            gfx::mix(th().value.with_alpha(0.45f), th().accent_pale, mode_.value);
         draw_docked(c, track.x + 26.0f, cy, docked);
-        text_shrink(c, tr("Docked"), track.x + 78.0f, baseline(track.y, track.h, theme::kText24),
-                    theme::kText24, docked, half - 78.0f - 10.0f, Align::left, 0.0f, 0.7f);
+        text_shrink(c, tr("Docked"), track.x + 78.0f, baseline(track.y, track.h, th().size_text),
+                    th().size_text, docked, half - 78.0f - 10.0f, Align::left, 0.0f, 0.7f);
         draw_handheld(c, track.x + half + 18.0f, cy, handheld);
         text_shrink(c, tr("Handheld"), track.x + half + 72.0f,
-                    baseline(track.y, track.h, theme::kText24), theme::kText24, handheld,
+                    baseline(track.y, track.h, th().size_text), th().size_text, handheld,
                     half - 72.0f - 10.0f, Align::left, 0.0f, 0.7f);
     }
     else
     {
         text_shrink(c, tr("Unavailable"), kModeRow.x + kModeRow.w - 26.0f,
-                    baseline(kModeRow.y, kModeRow.h, theme::kText24), theme::kText24, theme::kMeta,
+                    baseline(kModeRow.y, kModeRow.h, th().size_text), th().size_text, th().meta,
                     400.0f, Align::right);
     }
 
     // ---- mods: one switch for all of the game's mods (Square) ----
     const bool has_mods = can_configure && game->mods > 0;
-    plate_rest(c, kRowPlate, kModsRow);
-    text_shrink(c, tr("Mods"), kModsRow.x + 26.0f, baseline(kModsRow.y, kModsRow.h, theme::kText24),
-                theme::kText24, has_mods ? theme::kValue : theme::kMeta, 256.0f);
+    plate_rest(c, row_plate(), kModsRow);
+    text_shrink(c, tr("Mods"), kModsRow.x + 26.0f, baseline(kModsRow.y, kModsRow.h, th().size_text),
+                th().size_text, has_mods ? th().value : th().meta, 256.0f);
     if (has_mods)
     {
         // The switch at the right, as wide as the console mode's control is from the edge; what
@@ -631,14 +631,14 @@ void Launcher::draw_library(Canvas &c)
             game->mods_enabled ? fill(tr("{0} of {1} on"),
                                       {std::to_string(game->mods_on), std::to_string(game->mods)}) :
                                  std::string{tr("Off")};
-        text_shrink(c, state, right - 64.0f - 22.0f, baseline(kModsRow.y, kModsRow.h, theme::kSmall),
-                    theme::kSmall, gfx::mix(theme::kMeta, theme::kLimePale, on), 330.0f, Align::right);
+        text_shrink(c, state, right - 64.0f - 22.0f, baseline(kModsRow.y, kModsRow.h, th().size_small),
+                    th().size_small, gfx::mix(th().meta, th().accent_pale, on), 330.0f, Align::right);
     }
     else
     {
         text_shrink(c, can_configure ? tr("No mods") : tr("Unavailable"),
-                    kModsRow.x + kModsRow.w - 26.0f, baseline(kModsRow.y, kModsRow.h, theme::kText24),
-                    theme::kText24, theme::kMeta, 400.0f, Align::right);
+                    kModsRow.x + kModsRow.w - 26.0f, baseline(kModsRow.y, kModsRow.h, th().size_text),
+                    th().size_text, th().meta, 400.0f, Align::right);
     }
     // The console mode is changed with left and right (not on a game that is still on its sources).
     if (game == nullptr || !game->remote)
@@ -653,8 +653,8 @@ void Launcher::draw_library(Canvas &c)
                              remote ? tr("Not on the console yet. Download it to play and to change its settings.") :
                              can_configure ? tr("Change mode. Saved per game.") :
                                              tr("Select a readable game to configure its mode.");
-    notice(c, hint, 1060.0f, 883.0f, theme::kSmall,
-           said ? (message_warning_ ? theme::kWarning : theme::kLimePale) : failed ? theme::kWarning : theme::kMeta,
+    notice(c, hint, 1060.0f, 883.0f, th().size_small,
+           said ? (message_warning_ ? th().warning : th().accent_pale) : failed ? th().warning : th().meta,
            700.0f, (said && message_warning_) || failed);
 
     if (remote)
@@ -826,13 +826,13 @@ void Launcher::draw_game(Canvas &c, float open)
     list.push_opacity(open);
     list.push_transform(1.0f - 0.03f * (1.0f - open) * motion(), 960.0f, 540.0f, 0.0f,
                         (1.0f - open) * 26.0f * motion());
-    glass(c, kDialog, 26.0f, theme::kPanel.with_alpha(0.97f), theme::kPanelEdge.with_alpha(0.66f),
+    glass(c, kDialog, 26.0f, th().panel.with_alpha(0.97f), th().panel_edge.with_alpha(0.66f),
           1.6f);
-    text_shrink(c, tr("Game settings"), 592.0f, baseline(218.0f, 62.0f, theme::kDisplay),
-                theme::kDisplay, theme::kTitle, 736.0f);
+    text_shrink(c, tr("Game settings"), 592.0f, baseline(218.0f, 62.0f, th().size_display),
+                th().size_display, th().title, 736.0f);
     const Game *game = games_.empty() ? nullptr : &games_[static_cast<std::size_t>(library_.selected)];
     text_fit(c, game != nullptr ? game->name : std::string{}, 592.0f,
-             baseline(291.0f, 32.0f, theme::kSmall), theme::kSmall, Color::rgb(0xcbb9be), 736.0f);
+             baseline(291.0f, 32.0f, th().size_small), th().size_small, th().note, 736.0f);
 
     // A kind of setting: what the game does differently from Settings, if anything.
     const auto changed = [this](int category)
@@ -872,10 +872,10 @@ void Launcher::draw_game(Canvas &c, float open)
     for (int row = game_rows_.first_row(); row <= game_rows_.last_row(); ++row)
     {
         list.push_opacity(game_rows_.row_alpha(row, kDialogRowHeight));
-        plate_rest(c, kRowPlate, {592.0f, row_top(row), 736.0f, kDialogRowHeight});
+        plate_rest(c, row_plate(), {592.0f, row_top(row), 736.0f, kDialogRowHeight});
         list.pop_opacity();
     }
-    plate_focus(c, kRowPlate,
+    plate_focus(c, row_plate(),
                 {592.0f, kDialogRowsTop + game_rows_.cursor() - game_rows_.scroll(), 736.0f,
                  kDialogRowHeight},
                 1.0f);
@@ -893,13 +893,13 @@ void Launcher::draw_game(Canvas &c, float open)
                                               game_overrides(kind - row_video) > 0;
         const float taken =
             kind != row_mode ?
-                text_shrink(c, values[kind], 1292.0f, baseline(top, kDialogRowHeight, theme::kSmall),
-                            theme::kSmall, there ? theme::kLimePale : theme::kMeta, 320.0f,
+                text_shrink(c, values[kind], 1292.0f, baseline(top, kDialogRowHeight, th().size_small),
+                            th().size_small, there ? th().accent_pale : th().meta, 320.0f,
                             Align::right) :
-                chooser(c, values[kind], 1296.0f, baseline(top, kDialogRowHeight, theme::kText24),
-                        focus, theme::kLimePale);
-        text_shrink(c, tr(kLabels[kind]), 628.0f, baseline(top, kDialogRowHeight, theme::kText24),
-                    theme::kText24, kind == row_delete ? theme::kWarning : theme::kValue, 664.0f - taken - 28.0f);
+                chooser(c, values[kind], 1296.0f, baseline(top, kDialogRowHeight, th().size_text),
+                        focus, th().accent_pale);
+        text_shrink(c, tr(kLabels[kind]), 628.0f, baseline(top, kDialogRowHeight, th().size_text),
+                    th().size_text, kind == row_delete ? th().warning : th().value, 664.0f - taken - 28.0f);
         list.pop_opacity();
     }
     list.pop_clip();
@@ -908,32 +908,32 @@ void Launcher::draw_game(Canvas &c, float open)
     if (!message_.empty())
     {
         // Up to two lines: what Save data answers is longer than a "Saved".
-        notice_block(c, message_, 592.0f, kDialogHints - 6.0f, theme::kSmall, 26.0f,
-                     message_warning_ ? theme::kWarning : theme::kLimePale, 736.0f, 2,
+        notice_block(c, message_, 592.0f, kDialogHints - 6.0f, th().size_small, 26.0f,
+                     message_warning_ ? th().warning : th().accent_pale, 736.0f, 2,
                      message_warning_);
     }
     else if (game_row(option_) == row_delete)
     {
         static constexpr Hint kDelete[] = {{Pad::cross, TR("Delete")}, {Pad::circle, TR("Back")}};
-        draw_hints(c, kDelete, 2, 592.0f, kDialogHints, theme::kCopy, 736.0f);
+        draw_hints(c, kDelete, 2, 592.0f, kDialogHints, th().copy, 736.0f);
     }
     else if (game_row(option_) == row_save)
     {
         static constexpr Hint kTransfer[] = {{Pad::cross, TR("Import")},
                                              {Pad::square, TR("Export a copy")},
                                              {Pad::circle, TR("Back")}};
-        draw_hints(c, kTransfer, 3, 592.0f, kDialogHints, theme::kCopy, 736.0f);
+        draw_hints(c, kTransfer, 3, 592.0f, kDialogHints, th().copy, 736.0f);
     }
     else if (option_ != row_mode)
     {
         static constexpr Hint kOpen[] = {{Pad::cross, TR("Open")}, {Pad::circle, TR("Back")}};
-        draw_hints(c, kOpen, 2, 592.0f, kDialogHints, theme::kCopy, 736.0f);
+        draw_hints(c, kOpen, 2, 592.0f, kDialogHints, th().copy, 736.0f);
     }
     else
     {
         static constexpr Hint kHints[] = {
             {Pad::updown, TR("Select")}, {Pad::leftright, TR("Change")}, {Pad::circle, TR("Back")}};
-        draw_hints(c, kHints, 3, 592.0f, kDialogHints, theme::kCopy, 736.0f);
+        draw_hints(c, kHints, 3, 592.0f, kDialogHints, th().copy, 736.0f);
     }
     list.pop_transform();
     list.pop_opacity();
@@ -1027,21 +1027,21 @@ void Launcher::draw_mods(Canvas &c, float open)
     list.push_opacity(open);
     list.push_transform(1.0f - 0.03f * (1.0f - open) * motion(), 960.0f, 540.0f, 0.0f,
                         (1.0f - open) * 26.0f * motion());
-    glass(c, kDialog, 26.0f, theme::kPanel.with_alpha(0.97f), theme::kPanelEdge.with_alpha(0.66f),
+    glass(c, kDialog, 26.0f, th().panel.with_alpha(0.97f), th().panel_edge.with_alpha(0.66f),
           1.6f);
-    text_shrink(c, tr("Mods"), 592.0f, baseline(218.0f, 62.0f, theme::kDisplay), theme::kDisplay,
-                theme::kTitle, 736.0f);
+    text_shrink(c, tr("Mods"), 592.0f, baseline(218.0f, 62.0f, th().size_display), th().size_display,
+                th().title, 736.0f);
     const Game *game = games_.empty() ? nullptr : &games_[static_cast<std::size_t>(library_.selected)];
     text_fit(c, game != nullptr ? game->name : std::string{}, 592.0f,
-             baseline(291.0f, 32.0f, theme::kSmall), theme::kSmall, Color::rgb(0xcbb9be), 736.0f);
+             baseline(291.0f, 32.0f, th().size_small), th().size_small, th().note, 736.0f);
 
     if (mods_.empty())
     {
         text_block(c,
                    fill(tr("No mods for this game yet. Copy each mod's folder to {0}, next to roms/."),
                         {game != nullptr ? services_.mods_folder(game->title_id) : std::string{}}),
-                   592.0f, baseline(364.0f, 40.0f, theme::kText24), theme::kText24, 40.0f,
-                   theme::kBody, 736.0f, 5, kShrink);
+                   592.0f, baseline(364.0f, 40.0f, th().size_text), th().size_text, 40.0f,
+                   th().body, 736.0f, 5, kShrink);
     }
     else
     {
@@ -1052,10 +1052,10 @@ void Launcher::draw_mods(Canvas &c, float open)
         for (int row = mod_rows_.first_row(); row <= mod_rows_.last_row(); ++row)
         {
             list.push_opacity(mod_rows_.row_alpha(row, kDialogRowHeight));
-            plate_rest(c, kRowPlate, {592.0f, row_top(row), 736.0f, kDialogRowHeight});
+            plate_rest(c, row_plate(), {592.0f, row_top(row), 736.0f, kDialogRowHeight});
             list.pop_opacity();
         }
-        plate_focus(c, kRowPlate,
+        plate_focus(c, row_plate(),
                     {592.0f, kDialogRowsTop + mod_rows_.cursor() - mod_rows_.scroll(), 736.0f,
                      kDialogRowHeight},
                     1.0f);
@@ -1075,8 +1075,8 @@ void Launcher::draw_mods(Canvas &c, float open)
                 const Cheat &cheat = mod.cheats[static_cast<std::size_t>(at.cheat)];
                 const bool used = live && mod.enabled;
                 text_fit(c, cheat.name, 668.0f,
-                         baseline(top + (kDialogRowHeight - 38.0f) * 0.5f, 38.0f, theme::kText24),
-                         theme::kText24, cheat.enabled && used ? theme::kValue : theme::kMeta, 520.0f);
+                         baseline(top + (kDialogRowHeight - 38.0f) * 0.5f, 38.0f, th().size_text),
+                         th().size_text, cheat.enabled && used ? th().value : th().meta, 520.0f);
                 list.push_opacity(used ? 1.0f : 0.4f);
                 toggle(c, 1292.0f, top + kDialogRowHeight * 0.5f, cheat.enabled ? 1.0f : 0.0f);
                 list.pop_opacity();
@@ -1092,10 +1092,10 @@ void Launcher::draw_mods(Canvas &c, float open)
                                          mod.cheats.begin(), mod.cheats.end(),
                                          [](const Cheat &cheat) { return cheat.enabled; })),
                                      std::to_string(mod.cheats.size())});
-            text_fit(c, mod.name, 628.0f, baseline(top + 14.0f, 38.0f, theme::kText24),
-                     theme::kText24, mod.enabled && live ? theme::kValue : theme::kMeta, 560.0f);
-            text_shrink(c, kind, 628.0f, baseline(top + 52.0f, 28.0f, theme::kSmall),
-                        theme::kSmall, theme::kMeta, 560.0f);
+            text_fit(c, mod.name, 628.0f, baseline(top + 14.0f, 38.0f, th().size_text),
+                     th().size_text, mod.enabled && live ? th().value : th().meta, 560.0f);
+            text_shrink(c, kind, 628.0f, baseline(top + 52.0f, 28.0f, th().size_small),
+                        th().size_small, th().meta, 560.0f);
             list.push_opacity(live ? 1.0f : 0.4f);
             toggle(c, 1292.0f, top + kDialogRowHeight * 0.5f, mod.enabled ? 1.0f : 0.0f);
             list.pop_opacity();
@@ -1107,22 +1107,22 @@ void Launcher::draw_mods(Canvas &c, float open)
 
     if (!message_.empty())
     {
-        notice_block(c, message_, 592.0f, kDialogHints - 6.0f, theme::kSmall, 26.0f,
-                     message_warning_ ? theme::kWarning : theme::kLimePale, 736.0f, 2,
+        notice_block(c, message_, 592.0f, kDialogHints - 6.0f, th().size_small, 26.0f,
+                     message_warning_ ? th().warning : th().accent_pale, 736.0f, 2,
                      message_warning_);
     }
     else if (mods_.empty())
     {
         static constexpr Hint kEmpty[] = {{Pad::square, TR("Create the folder")},
                                           {Pad::circle, TR("Back")}};
-        draw_hints(c, kEmpty, 2, 592.0f, kDialogHints, theme::kCopy, 736.0f);
+        draw_hints(c, kEmpty, 2, 592.0f, kDialogHints, th().copy, 736.0f);
     }
     else
     {
         static constexpr Hint kHints[] = {{Pad::updown, TR("Select")},
                                           {Pad::cross, TR("Turn on or off")},
                                           {Pad::circle, TR("Back")}};
-        draw_hints(c, kHints, 3, 592.0f, kDialogHints, theme::kCopy, 736.0f);
+        draw_hints(c, kHints, 3, 592.0f, kDialogHints, th().copy, 736.0f);
     }
     list.pop_transform();
     list.pop_opacity();

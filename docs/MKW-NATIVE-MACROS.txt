@@ -26,9 +26,10 @@ checked before effects. PS5 macro recovery and the existing Bananza-specific
 compatibility path are retained. A global include override and a Ninja dependency
 audit keep all compiled consumers on one MacroEngine layout.
 
-Native dispatch remains disabled by default:
-  EDEN_NX2_MME_NATIVE=0       existing path (also the default when unset)
-  EDEN_NX2_MME_NATIVE=1       enable recognized native replacements
+Native dispatch is on by default since 2026-11-08 (it only replaces macros whose SHA-256
+matches a signed Mario Kart World layout; every other title keeps the JIT):
+  EDEN_NX2_MME_NATIVE=0       existing JIT/interpreter path
+  EDEN_NX2_MME_NATIVE=1       enable recognized native replacements (also the default when unset)
   EDEN_NX2_MME_NATIVE=check   compare effects on copies, execute the existing path
 Check mode samples the first 16 calls and every 4096th call per handler/context.
 These switches are read once per process from the app's env.txt. The separate
@@ -121,3 +122,18 @@ Matching packaged ELF SHA-256:
 Private receipts/logs remain local under .local/macro-native/. The public report
 contains measurements and hashes only. License attribution is retained separately
 in THIRD_PARTY_NOTICES.md.
+
+2026-11-08 requalification (default on)
+Build: main + RADV robustness (#77) + core patch 0037 (vdecsvc 201, without which a race
+never starts), scripted input. The MKW bench now drives the pad (--events): title, menus, Grand
+Prix, course intro, race loading.
+- Check mode, attract scenes (dev build, 1x, 2 runs of 300 s): 111,149,056 and 118,816,768
+  sampled comparisons over five handlers, 0 differences, 0 mismatch lines.
+- Check mode, menus into a race (0.5x, 2 runs): 17,039,360 and 13,369,344 comparisons,
+  0 differences.
+- FPS (weighted), JIT vs native: attract 1x 30.35/30.41 vs 24.46/35.33; menus into a race 0.5x
+  43.09/21.28 vs 44.16/41.27. Worst frames are load spikes in every mode (JIT path, check
+  mode, native alike: 0.4-1.2 s). No difference beyond the run-to-run spread.
+- Not reached: a full race. Every mode ran out of device memory (or lost the device) while
+  the race loaded or soon after, at 1x and at 0.5x, the pool exhaustion tracked in #76; one
+  native run and one check run lasted the whole 420 s without a report.

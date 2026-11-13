@@ -87,7 +87,7 @@ void Launcher::open(Screen screen, bool forward)
     leaving_ = screen_;
     screen_ = screen;
     forward_ = forward;
-    transition_.start(theme::kScreenSeconds);
+    transition_.start(th().screen_seconds);
     message_.clear();
     cue(forward ? Cue::open : Cue::back);
 }
@@ -119,7 +119,8 @@ std::array<bool, 7> Launcher::switch_states(Modal modal) const
     case Modal::controls:
         return {prefs_.vibration, false, false};
     case Modal::accessibility:
-        return {prefs_.large_text, prefs_.high_contrast, prefs_.reduce_motion};
+        // The theme and its accent colour are choosers; the switches follow them.
+        return {false, false, prefs_.large_text, prefs_.high_contrast, prefs_.reduce_motion};
     default:
         return {prefs_.detailed_logging, prefs_.immediate_logs, false};
     }
@@ -135,6 +136,10 @@ void Launcher::close_modal()
 void Launcher::apply_look()
 {
     look() = {prefs_.large_text, prefs_.high_contrast, prefs_.reduce_motion};
+    // A theme this build has not (a settings file from another version) shows the default.
+    if (!use_theme(prefs_.theme))
+        use_theme(themes().front().id);
+    use_accent(prefs_.accent);
 }
 
 bool Launcher::save_preferences(bool quiet)
@@ -158,6 +163,13 @@ void Launcher::launch(const std::string &file, const std::string &title, const s
         read_home();
         drop_missing_games();
         say(tr("ROM missing from the game files folder"), true);
+        cue(Cue::error);
+        return;
+    }
+    // An encrypted game while the keys or firmware are missing: unencrypted ones still start.
+    if (const std::string blocked = services_.launch_blocked(file); !blocked.empty())
+    {
+        say(blocked, true);
         cue(Cue::error);
         return;
     }
@@ -199,7 +211,7 @@ void Launcher::launch_game(const std::string &file, const std::string &title, co
     selected_game_ = services_.game_path(file);
     launch_title_ = title;
     launch_cover_ = cover;
-    launch_.start(theme::kLaunchSeconds);
+    launch_.start(th().launch_seconds);
     press_ = 1.0f;
     cue(Cue::launch);
 }
@@ -296,7 +308,7 @@ void Launcher::update(float dt)
     for (std::size_t i = 0; i < home_springs_.size(); ++i)
     {
         home_springs_[i].target = static_cast<int>(i) == home_focus_ ? 1.0f : 0.0f;
-        home_springs_[i].update(dt, theme::kFocusSpring);
+        home_springs_[i].update(dt, th().focus_spring);
     }
     library_.update(dt);
     settings_.update(dt);
@@ -304,6 +316,7 @@ void Launcher::update(float dt)
     language_.update(dt);
     video_rows_.update(dt);
     performance_rows_.update(dt);
+    accessibility_rows_.update(dt);
     game_rows_.update(dt);
     mod_rows_.update(dt);
     option_rows_.update(dt);
@@ -325,7 +338,7 @@ void Launcher::update(float dt)
     section_.update(dt, 14.0f);
     if (modal_ != Modal::none)
         option_cursor_.target = dialog_row_top(modal_, option_);
-    option_cursor_.update(dt, theme::kCursorSpring);
+    option_cursor_.update(dt, th().cursor_spring);
     const std::array<bool, 7> states = switch_states(modal_shown_);
     for (std::size_t i = 0; i < states.size(); ++i)
     {
@@ -427,16 +440,16 @@ void Launcher::draw_screen(Canvas &c, Screen screen)
 
 void Launcher::draw_frame(Canvas &c, const char *title, const char *copy)
 {
-    text_shrink(c, title, 108.0f, baseline(62.0f, 64.0f, theme::kDisplay), theme::kDisplay,
-                theme::kTitle, 1704.0f);
-    text_shrink(c, copy, 110.0f, baseline(130.0f, 30.0f, theme::kSmall), theme::kSmall, theme::kCopy,
+    text_shrink(c, title, 108.0f, baseline(62.0f, 64.0f, th().size_display), th().size_display,
+                th().title, 1704.0f);
+    text_shrink(c, copy, 110.0f, baseline(130.0f, 30.0f, th().size_small), th().size_small, th().copy,
                 1700.0f);
 }
 
 void Launcher::draw_footer(Canvas &c, const Hint *hints, int count)
 {
-    c.list.rounded_rect({108.0f, 955.0f, 1704.0f, 1.0f}, 0.0f, Color::rgb(0x6d585d, 0.9f));
-    draw_hints(c, hints, count, 108.0f, 987.0f, theme::kCopy, 1704.0f);
+    c.list.rounded_rect({108.0f, 955.0f, 1704.0f, 1.0f}, 0.0f, th().divider.with_alpha(0.9f));
+    draw_hints(c, hints, count, 108.0f, 987.0f, th().copy, 1704.0f);
 }
 
 void Launcher::draw_update_notice(Canvas &c)
@@ -449,23 +462,23 @@ void Launcher::draw_update_notice(Canvas &c)
     const Rect panel{1352.0f, 44.0f, 520.0f, 108.0f};
     list.push_opacity(shown);
     list.push_transform(1.0f, 0.0f, 0.0f, (1.0f - shown) * 72.0f * motion(), 0.0f);
-    glass(c, panel, 20.0f, theme::kPanel.with_alpha(0.97f), theme::kLime.with_alpha(0.55f), 1.4f);
+    glass(c, panel, 20.0f, th().panel.with_alpha(0.97f), th().accent.with_alpha(0.55f), 1.4f);
     // A mark at the left: a lime disc with an arrow up.
     const float cx = panel.x + 48.0f;
     const float cy = panel.y + 50.0f;
-    list.circle(cx, cy, 20.0f, theme::kLime.with_alpha(0.22f));
-    list.line(cx, cy + 9.0f, cx, cy - 9.0f, 2.6f, theme::kLime);
-    list.line(cx - 8.0f, cy - 2.0f, cx, cy - 10.0f, 2.6f, theme::kLime);
-    list.line(cx + 8.0f, cy - 2.0f, cx, cy - 10.0f, 2.6f, theme::kLime);
-    text_shrink(c, tr("Update available"), panel.x + 88.0f, baseline(panel.y + 18.0f, 34.0f, theme::kText24),
-                theme::kText24, theme::kTitle, panel.w - 112.0f);
+    list.circle(cx, cy, 20.0f, th().accent.with_alpha(0.22f));
+    list.line(cx, cy + 9.0f, cx, cy - 9.0f, 2.6f, th().accent);
+    list.line(cx - 8.0f, cy - 2.0f, cx, cy - 10.0f, 2.6f, th().accent);
+    list.line(cx + 8.0f, cy - 2.0f, cx, cy - 10.0f, 2.6f, th().accent);
+    text_shrink(c, tr("Update available"), panel.x + 88.0f, baseline(panel.y + 18.0f, 34.0f, th().size_text),
+                th().size_text, th().title, panel.w - 112.0f);
     text_shrink(c, fill(tr("Version {0} is on prosperostore.net"), {update_version_}), panel.x + 88.0f,
-                baseline(panel.y + 54.0f, 30.0f, theme::kSmall), theme::kSmall, theme::kCopy,
+                baseline(panel.y + 54.0f, 30.0f, th().size_small), th().size_small, th().copy,
                 panel.w - 112.0f);
     // The time it has left.
     const float left = tween::clamp01(update_notice_left_ / kUpdateNoticeSeconds);
     list.rounded_rect({panel.x + 20.0f, panel.y + panel.h - 12.0f, (panel.w - 40.0f) * left, 3.0f}, 1.5f,
-                      theme::kLime.with_alpha(0.8f));
+                      th().accent.with_alpha(0.8f));
     list.pop_transform();
     list.pop_opacity();
 }
@@ -476,7 +489,7 @@ void Launcher::draw_launch(Canvas &c)
     // The menu dims, the game's cover steps forward, then everything goes dark.
     const float black = tween::cubic_in_out((t - 0.45f) / 0.55f);
     const float veil = std::max(0.90f * tween::cubic_out(t / 0.22f), black);
-    c.list.rounded_rect(kScreen, 0.0f, Color::rgb(0x070203, veil));
+    c.list.rounded_rect(kScreen, 0.0f, th().veil.with_alpha(veil));
 
     const float appear = tween::back_out(t / 0.38f);
     const float leave = 1.0f - tween::cubic_in_out((t - 0.60f) / 0.40f);
@@ -484,10 +497,10 @@ void Launcher::draw_launch(Canvas &c)
     c.list.push_transform(1.0f - 0.14f * (1.0f - appear) * motion(), 960.0f, 470.0f, 0.0f, 0.0f);
     const Rect art{810.0f, 300.0f, 300.0f, 300.0f};
     c.list.shadow({art.x - 10.0f, art.y - 4.0f, art.w + 20.0f, art.h + 20.0f}, 30.0f, 70.0f,
-                  theme::kLime.with_alpha(0.22f));
+                  th().accent.with_alpha(0.22f));
     cover(c, launch_cover_, art, 20.0f, 1.0f);
-    text(c, tr("STARTING"), 960.0f, 668.0f, theme::kSmall, theme::kLime, Align::center, 4.0f);
-    text_fit(c, launch_title_, 960.0f, 716.0f, theme::kHeading, theme::kTitle, 1300.0f,
+    text(c, tr("STARTING"), 960.0f, 668.0f, th().size_small, th().accent, Align::center, 4.0f);
+    text_fit(c, launch_title_, 960.0f, 716.0f, th().size_heading, th().title, 1300.0f,
              Align::center);
     c.list.pop_transform();
     c.list.pop_opacity();
@@ -526,7 +539,7 @@ void Launcher::draw(gfx::DrawList &list)
     if (modal_shown_ != Modal::none)
     {
         const float opened = tween::clamp01(modal_open_.value);
-        list.rounded_rect(kScreen, 0.0f, theme::kScrim.with_alpha(0.69f * opened));
+        list.rounded_rect(kScreen, 0.0f, th().scrim.with_alpha(0.69f * opened));
         if (modal_shown_ == Modal::game)
             draw_game(c, opened);
         else if (modal_shown_ == Modal::mods)

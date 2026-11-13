@@ -10,7 +10,7 @@
 
 **EglantinePS5 is an unofficial PlayStation 5 port of [Eglantine](https://github.com/Djihads80/Eglantine)**, a Switch 2 capable fork of [Eden](https://github.com/eden-emulator/mirror) - an accurate, high-performance emulator. All credit for the emulator core belongs to the Eglantine and Eden projects and their contributors. EglantinePS5 is not affiliated with or endorsed by the Eglantine team, the Eden team or Sony.
 
-This is an early alpha. Video, audio, controller input, and saves have been confirmed working. Compatibility and performance will vary between games. The current release is **v1.000.000**.
+This is an early alpha. Video, audio, controller input, and saves have been confirmed working. Compatibility and performance will vary between games. The current release is **v1.000.002** (a pre-release).
 
 ## Source code
 
@@ -53,7 +53,7 @@ Local-wireless multiplayer through Eden rooms is new in v1.000.000 and experimen
 - **Settings per game** - a game can differ from Settings in its video, performance, audio, controls and language, and has its own Handheld / Docked mode (Triangle in the Library); see [Settings per game](#settings-per-game).
 - **Button mapping** - choose which DualSense button presses each of the game's buttons, for every controller, in **Settings > Controls**, or for one game in its settings; see [Button mapping](#button-mapping).
 - **Your language** - the launcher follows the language the PS5 is set to (29 languages; English otherwise).
-- **Accessibility** - larger text, high contrast and reduced motion, in **Settings > Accessibility**.
+- **Accessibility and themes** - larger text, high contrast, reduced motion, and a choice of launcher themes and accent colors, in **Settings > Accessibility**.
 - **Save data in and out** - import a game's save from a folder or from a Ryujinx data folder, and export a copy (Triangle in the Library, then **Save data**).
 - **Game updates and DLC** - put update and DLC files (NSP or XCI) in the `updates` folder next to `roms`. They apply when the game starts, and each game's details show the update version and DLC count.
 - **Download sources** - the games on servers in your network, such as a [RomM](https://github.com/rommapp/romm) server, appear in the Library next to the ones on the console. A game is downloaded when you play it, or ahead of time through a download queue, and then runs from the console like any other: nothing is streamed. Downloads need an FTP server running on the console; see [Download sources](#download-sources).
@@ -77,7 +77,7 @@ Local-wireless multiplayer through Eden rooms is new in v1.000.000 and experimen
 1. Download and extract the release ZIP.
 2. Copy the included `PPSA98515` folder to `/data/homebrew/PPSA98515` on the PS5 (or to another folder ShadowMountPlus scans, such as `/mnt/usb0/homebrew/PPSA98515`).
 3. Make sure your jailbreak environment's local ELF loader is listening on TCP port 9021 (most setups have it). [Updates from the menu](#updating) use it, and with a ShadowMountPlus older than 1.7beta4 EglantinePS5 sends its bundled Lapy helper through it.
-4. Put your own legally dumped keys, firmware, and games in a **game files folder** (layout below). It can be anywhere the PS5 can read: internal storage, an M.2 or external drive, or a USB device.
+4. Put your own legally dumped keys, firmware, and games in a **game files folder** (layout below). It can be anywhere the PS5 can read: internal storage, an M.2 or external drive, or a USB device. Keys and firmware are only needed for encrypted games (`.nsp`, `.xci`): unencrypted games (`.nup` files and extracted game folders) start without them.
 5. Launch **EglantinePS5**, open **Settings > Game files**, browse to that folder and select it. The default is `/data/eglantineps5`.
 6. Close and reopen EglantinePS5, then open **Library**. Setup is checked when the app opens, so reopen it after changing the folder or adding keys or firmware.
 
@@ -87,14 +87,15 @@ Only these subfolders matter; the folder itself can have any name and location.
 
 ```text
 <game files folder>/                    # e.g. /data/eglantineps5, /mnt/ext1/eden, /mnt/usb0/eden
-├── keys/
+├── keys/                               # only for .nsp and .xci games
 │   ├── prod.keys
 │   └── title.keys                      # optional
-├── firmware/
+├── firmware/                           # only for .nsp and .xci games
 │   └── *.nca                           # extracted firmware NCAs
 ├── roms/
 │   ├── Game.nsp
-│   └── Game.xci
+│   ├── Game.xci
+│   └── Game.nup                        # an unencrypted dump in one file (see below)
 ├── updates/                            # optional: update and DLC files
 │   └── Game update.nsp
 ├── mods/                               # optional: mods, one folder per title ID
@@ -111,7 +112,9 @@ Only these subfolders matter; the folder itself can have any name and location.
 └── .remote-downloads/                  # downloads that are not finished yet (see Download sources)
 ```
 
-Extracted games can also be copied as `roms/<game>/exefs/main` with `romfs/` beside `exefs/`, or as `roms/<game>/base/exefs/main` with updates in `roms/<game>/updates/<decimal version>/`. A complete extracted dump kept entirely in `roms/<game>/updates/<decimal version>/` is supported too: when the base executable is absent, the Library finds the newest version containing `exefs/main`. Each game appears once in the Library. For the versioned layout, newer update files override older ones in both `exefs/` and `romfs/`; files missing from updates are read from the base. Keep the extracted folders together when copying the game. Use binary mode for FTP transfers to preserve executable and asset bytes.
+Extracted games can also be copied as `roms/<game>/exefs/main` with `romfs/` beside `exefs/`, or as `roms/<game>/base/exefs/main` with updates in `roms/<game>/updates/<decimal version>/`. A complete extracted dump kept entirely in `roms/<game>/updates/<decimal version>/` is supported too: when the base executable is absent, the Library finds the newest version containing `exefs/main`. Each game appears once in the Library, and none of these layouts needs keys or firmware. For the versioned layout, newer update files override older ones in both `exefs/` and `romfs/`; files missing from updates are read from the base. Keep the extracted folders together when copying the game. Use binary mode for FTP transfers to preserve executable and asset bytes.
+
+An extracted dump can also be one `.nup` file in `roms/` ([NUP](https://github.com/a55uka/nup), made with its `nup pack` from the folders above). It needs no keys. The Library shows its title and icon, and it starts like the extracted folder it was made from: the newest update in it overrides the base, file by file, and mods apply. Files compressed in it are read as the game asks for them; one larger than 8 MiB is unpacked once into `/data/eglantineps5/user/cache/nup/` (named after its SHA-256) and read from there afterwards. DLC packed into a `.nup` is not loaded yet.
 
 The folder browser shows how many keys, firmware files, and games each folder holds, so you can check a folder before selecting it. Moving your files later only needs a new selection in Settings; saved settings, covers, and recently played games carry over.
 
@@ -221,7 +224,7 @@ A download source is a server in your network that has games, such as a [RomM](h
 - **Which game is which.** Each source says what it knows of a game: its title ID, its ids at metadata providers (IGDB, ScreenScraper and the like) and whether its name comes from such metadata. Two sources' games are the same game when the first of these that both know agrees: the title ID, then an id at a provider both have one of, then the name (when both names come from metadata; case, accents and punctuation do not count), else the file name. A game on the console is the source's game when it has the file name the source gives it (a downloaded one does), else when their title IDs agree (when the source knows one), else by its name.
 - **Play.** Cross on a game that is not on the console downloads it first. A ring shows how far it is and the time left, and the game starts once all of it is there. Circle lets it download in the background without starting it; Square cancels it. When several sources have the game, EglantinePS5 asks which one first.
 - **Download ahead.** Square on such a game puts it in the download queue, and Square again takes it out. The queue downloads one game at a time while the menu is open, also after EglantinePS5 was closed and opened again. **Settings > Downloads** lists it: Square cancels a download, Cross tries a failed one again, and Cross on a source reads the sources' game lists again (also done by itself when the menu opens after more than 15 minutes).
-- **Where the files go.** The game's file goes to `roms/`, under its name on the source; its updates and DLC go to `updates/`. What a source counts as the game, an update or DLC is up to it (a RomM server: its file categories). A game downloaded from a source keeps the file name it has there. Only `.nsp` and `.xci` files are downloaded, and an entry without a game file (an update or DLC on its own) is not listed.
+- **Where the files go.** The game's file goes to `roms/`, under its name on the source; its updates and DLC go to `updates/`. What a source counts as the game, an update or DLC is up to it (a RomM server: its file categories). A game downloaded from a source keeps the file name it has there. Only `.nsp`, `.xci` and `.nup` files are downloaded, and an entry without a game file (an update or DLC on its own) is not listed.
 - **An FTP server on the console.** Downloads are written by an FTP server running on the console (such as [ftpsrv](https://github.com/ps5-payload-dev/ftpsrv), which most setups have for copying the keys), on port 2121: EglantinePS5 hands it the bytes over loopback. Written by the app itself, a game of several gigabytes slowed the drive down to a few MB/s and stopped the menu; from a payload the drive keeps its speed. Without such a server a download fails and says so. `"ftp_port"` next to `"sources"` names another port (etaHEN's own FTP server, for example), and `"ftp_user"` and `"ftp_password"` a sign-in when the server asks for one (else `anonymous`). The server must support `REST` with `STOR`, to go on with a download.
 - **Interrupted downloads.** A download is written to `.remote-downloads/` in the game files folder, and once all of the game's files are complete they are moved to `roms/` and `updates/`, so those folders only ever hold whole files of whole games. It stops while a game runs and when EglantinePS5 closes, and goes on from where it was the next time the menu is open; the last 4 MB are downloaded again then, in case the console lost power while they were written. A cancel deletes what was downloaded (and never touches `roms/` or `updates/`), and what `.remote-downloads/` holds for a game that is not in the queue is deleted when the menu opens, so nothing is left behind. When the drive is full, the download stops and says so, as the FTP server reports it ("No space left on device"); nothing reaches `roms/` or `updates/`, what was downloaded stays in `.remote-downloads/`, and once there is room, Cross on it in **Settings > Downloads** goes on from there (Square cancels it and deletes it). The drive's free space is not checked before a download starts: an app on the console cannot ask for it.
 - **Checked as it comes.** RomM does not hash these files, so a download is checked on its way in, as Eden's integrity check checks a game: each NCA of an NSP or XCI against the SHA-256 it is named after, with no keys needed. A file found damaged is deleted and the download fails saying so; trying again downloads it again. A download that goes on reads what it had from the drive first (**Checking** in the queue). What the console's FTP server writes is not read back, and files that are no NSP or XCI are taken as they are.
@@ -333,7 +336,7 @@ The menu opens with the profile that the PS5 user in front chose last. If you us
 
 | Kind | What a game can have of its own |
 |---|---|
-| Video | Renderer, resolution, upscaling filter, refresh rate, FPS overlay, frame generation with its target and multiplier |
+| Video | Renderer, resolution, upscaling filter, refresh rate, FPS overlay (its size, corner and fields: renderer, FPS, worst frame, speed, busiest CPU core, GPU load, free memory, ping), frame generation with its target and multiplier |
 | Performance | Each of the seven switches |
 | Audio | Game volume, mute |
 | Controls | Vibration, and a button mapping of its own |
@@ -354,11 +357,30 @@ The D-pad, the sticks and the [in-game shortcuts](#in-game-shortcuts) do not cha
 
 The launcher follows the language the PS5 is set to: Arabic, Chinese (simplified and traditional), Czech, Danish, Dutch, Finnish, French, German, Greek, Hungarian, Indonesian, Italian, Japanese, Korean, Norwegian, Polish, Portuguese, Romanian, Russian, Spanish, Swedish, Thai, Turkish, Ukrainian and Vietnamese (with the regional variants the PS5 has for French, Portuguese and Spanish), and English otherwise. Arabic, Chinese, Greek, Japanese, Korean and Thai are drawn with the PS5's own system fonts. Arabic text runs right to left; the screens themselves are not mirrored. To use another one, put a file named `language.txt` holding its tag (for example `en-US` or `pt-BR`) in `/data/homebrew/PPSA98515`. The language *games* use is a separate setting, **Settings > Language**.
 
-**Settings > Accessibility** has three switches. **Larger text** draws the menu's small text about a third larger. **High contrast** uses solid panels, brighter text and an outlined highlight. **Reduce motion** stops the background drifting and the screens sliding, in the menu and on the loading screen. There is no screen reader.
+**Settings > Accessibility** starts with the launcher's **Theme** (Eglantine, the rose look, is the default; Canopy and Slate are the others) and its **Accent color**, a set of highlight colors for that theme; see [docs/THEMES.md](docs/THEMES.md). Under them are three switches. **Larger text** draws the menu's small text about a third larger. **High contrast** uses solid panels, brighter text and an outlined highlight. **Reduce motion** stops the background drifting and the screens sliding, in the menu and on the loading screen. There is no screen reader.
 
 ### Upgrading from an earlier alpha
 
 Earlier versions read everything from `/data/homebrew/PPSA98515/assets/`. That folder keeps working until you choose a game files folder, and settings are migrated automatically on first launch. To move to the new layout, move `assets/keys`, `assets/firmware` and `assets/roms` into any folder, then select it in **Settings > Game files**. The release ZIP contains no user files, so copy its app files over your installation without deleting your own data.
+
+## Changes in v1.000.002
+
+Pre-release. The emulator core is now upstream Eglantine (nx2, November 2026) with our PlayStation 5 changes, kept as part of this repository instead of a patched submodule.
+
+- **Faster in Zelda: Ocarina of Time**: gameplay holds the game's 30 FPS cap (about 20 FPS before), at the same picture.
+- **Donkey Kong Bananza no longer crashes when you smash the first rock wall** after the new-game intro (the console's GPU driver could not take the burst of terrain uploads in one submission).
+- **Memory and speed changes carried over to the new core**: guest reads of memory no texture uses skip the texture cache's lock, ASTC textures are converted in the background on busy frames, and the next frame's GPU work starts right after a frame is shown.
+- **Known issue: Mario Kart World runs out of memory** two to nine minutes in (at the race load or in a race). Most of the Mario Kart memory work of v1.000.001 is not in the new core yet.
+
+## Changes in v1.000.001
+
+First pre-release of EglantinePS5 on the Eglantine core (version numbering starts over; earlier tags were removed). Not a stable release.
+
+- **More games start.** Games packed as NUP containers start, and unencrypted games start without keys or firmware.
+- **The Legend of Zelda: Ocarina of Time** boots and renders gameplay (title screen, world, Switch 2 audio streams); its anti-aliasing network is skipped by default (Settings > Video).
+- **Mario Kart World memory.** Fixes for the race-load out-of-memory and memory leaks: guest memory packing, idle blocks given back, JIT code cache taken in smaller pieces, Mesa cache files capped.
+- **Faster draws and uploads** in several titles (draw delta path, texture memo, buffer sync early-outs, native MME macros on by default).
+- **More robust GPU memory handling** (RADV trims only granules unused for 2 s).
 
 ## Changes in v1.000.110
 
@@ -478,7 +500,7 @@ A bug fix for v1.000.090. If you are on v1.000.090, update.
 - **Games close in about a second.** Touchpad + L1 used to take 10-25 seconds to return to the library; logging no longer waits on the console's storage, and the emulator skips needless teardown work.
 - **Up to four controllers.** Each signed-in PS5 user's controller becomes the next player (player 1 is whoever launched the game); controllers can join or leave during a game, and games that ask for controllers connect every one in use.
 - The Touchpad + L1 and Touchpad + R1 shortcuts work from any controller.
-- **Vibration and motion.** DualSense rumble for games that use it (turn it off in **Settings > Controls**), and the controller's gyro and accelerometer for motion controls.
+- **Vibration and motion.** DualSense rumble for games that use it, played as HD rumble through the controller's haptic actuators (the classic rumble motors when those are not available), including Switch 2 games; turn it off or lower its strength (25-100%) in **Settings > Controls**. The controller's gyro and accelerometer drive motion controls.
 - **Resolution and upscaling.** **Settings > Video** now sets the internal rendering resolution (0.5x to 2x) and the filter that scales it to the TV: Bilinear, AMD FSR, Bicubic or Nearest.
 - **Per-game settings.** Press Triangle on a game in the Library to give it its own renderer, resolution and upscaling filter.
 - **Language setting.** **Settings > Language** picks the language games use (18 languages), with the console region that goes with it. It applies when a game starts.

@@ -6,21 +6,24 @@ builds on the following projects, each under its own license.
 ## Emulator
 
 - **[Eglantine](https://github.com/Djihads80/Eglantine)**, GPL-3.0-or-later, a fork of
-  **[Eden](https://github.com/eden-emulator/mirror)**. The emulator core, built from the commit the
-  `Eglantine` submodule records, together with the dependencies Eden
+  **[Eden](https://github.com/eden-emulator/mirror)**. The emulator core, kept in this repository as
+  `Eglantine/` (Eglantine/UPSTREAM.md), together with the dependencies Eden
   fetches and pins itself: Dynarmic, Boost, fmt, xbyak, zstd, lz4, Opus, SDL3,
   simpleini, sirit, SPIRV-Headers, Vulkan-Headers, Vulkan-Utility-Libraries,
   Vulkan Memory Allocator, ENet, frozen, cpp-httplib, nlohmann/json, and the time
   zone data. Each keeps its upstream license.
 - **[Zortos Eglantine fork](https://github.com/zortos293/Eglantine)**,
-  GPL-3.0-or-later. Referenced directly by the `Eglantine` submodule, including its
-  core, native shader, readback, service, runtime and test changes. The maintained
+  GPL-3.0-or-later. `Eglantine/` was imported from its nx2 branch (babdb6bb75) and
+  is changed here directly, including its core, native shader, readback, service, runtime and
+  test changes. The maintained
   Mario Kart performance patch also carries later core adaptations/backports;
   upstream source retains its GPL-3.0-or-later notices.
 - **[Catch2](https://github.com/catchorg/Catch2)**, BSL-1.0. Used by the focused
   host regression check at the version and source hash pinned by the core.
+- **[dav1d](https://code.videolan.org/videolan/dav1d)** by VideoLAN, BSD-2-Clause.
+  Built for the PS5 and linked into FFmpeg's libavcodec as its AV1 decoder.
 - **[FFmpeg](https://ffmpeg.org)**, LGPL-2.1-or-later. Built from Eden's pinned
-  source with only the H.264, VP8 and VP9 decoders.
+  source with only the H.264, VP8 and VP9 decoders, plus AV1 through dav1d.
 - **[OpenSSL](https://www.openssl.org)**, Apache-2.0, and
   **[zlib](https://zlib.net)**, zlib license. Taken from the
   [pacbrew](https://github.com/ps5-payload-dev/pacbrew-repo) PS5 packages.
@@ -56,6 +59,13 @@ builds on the following projects, each under its own license.
   MME equivalents and their differential checks (`headless/macro_native*`,
   `tools/check-macro-native*`) are also adapted from ProsperoEden; uploaded
   instruction streams are represented only by SHA-256 signatures.
+  The RADV driver adaptation that keeps dropped geometry-shader compute draws
+  off null pointers (`tools/patch-radv-gs-compute.py`) is backported from
+  ProsperoEden.
+  The FPS overlay's selectable fields, its size and corner settings and the
+  machine numbers it shows (busiest emulated core, GPU busy share from the
+  scheduler's timestamps, free memory) are adapted from ProsperoEden's overlay
+  (`headless/hud.h`, `headless/hud_gpu_time.h`, `headless/gpu_time_probe.inc`).
 - **[PS5 Mesa](https://github.com/mihawk-99/PS5_Mesa)** and
   **[PS5 Vulkan](https://github.com/mihawk-99/PS5_Vulkan)** by Mihawk. The
   RADV Vulkan driver (Mesa, mainly MIT) and its PS5 link recipe and platform
@@ -84,9 +94,21 @@ builds on the following projects, each under its own license.
 - **[ps5log](https://github.com/mpereiraesaa/ps5-agc-gears/tree/1ae1f9182abd2770c131b97419034fb85173c2dc/native/ps5log)**,
   GPL-3.0-or-later. The pinned single-header logging client used as an upstream
   Lapy helper build input.
+- **[ProsperoEden](https://github.com/blackbearreloaded/ProsperoEden)**,
+  GPL-3.0-or-later. The DualSense HD rumble through audio haptics with its
+  motor fallback (`headless/pad_haptics.*`, its wiring in `headless/pad.cpp`
+  and its host checks), the vibration strength setting, and the decoding of
+  the Switch 2 vibration batches (HID command 214; in the earlier pinned core's
+  patch series as 0039, not yet carried into `Eglantine/`) are adapted from
+  ProsperoEden.
 - **[ProsperoPuzzles](https://github.com/blackbearreloaded/ProsperoPuzzles)**,
   GPL-3.0-or-later. The launcher's drawing, text, animation and sound code
   (`headless/eglantineps5/pe`) started there.
+- **[ProsperoEden](https://github.com/blackbearreloaded/ProsperoEden)**,
+  GPL-3.0-or-later. The launcher's themes as data, their built-in Canopy and
+  Slate palettes and accent presets (`headless/eglantineps5/pe/ui/theme.*`), and
+  the check that the screens name colour roles (`tools/check-launcher-theme.py`)
+  are adapted from ProsperoEden's launcher.
 - **Montserrat** by Julieta Ulanovsky and contributors, SIL Open Font License
   1.1 (`third_party/fonts`). The launcher's font is baked from Montserrat Medium.
 - **[HarfBuzz](https://github.com/harfbuzz/harfbuzz)**, "Old MIT" license (its

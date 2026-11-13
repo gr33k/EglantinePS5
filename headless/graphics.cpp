@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "../src/fastmem.h"
 #include "performance.h"
 #include "ordered_read_trace.h"
 #include "assets_dir.h"
@@ -54,12 +55,65 @@ double LoadingCalm() {
     return calm;
 }
 std::atomic<bool> hud_enabled{true};
+// What the overlay shows and where (hud.h; Settings > Video): its fields, its size and its corner.
+// Read by the renderer thread, so they are set with the session's preferences as hud_enabled is.
+std::atomic<uint32_t> hud_fields{kHudFieldDefault};
+std::atomic<int> hud_size{0}, hud_corner{0};
+// The GPU is timed only while the overlay is on and shows its share (hud_gpu_time.h).
+void WantGpuTime() {
+    Hud::gpu_time_wanted.store(hud_enabled.load(std::memory_order_relaxed) &&
+                                   (hud_fields.load(std::memory_order_relaxed) & kHudFieldGpu) != 0,
+                               std::memory_order_relaxed);
+}
+void LoadHudPreferences() {
+    const auto preferences = PreferencesFor(session_title.load());
+    hud_enabled.store(preferences.hud, std::memory_order_relaxed);
+    hud_fields.store(static_cast<uint32_t>(preferences.hud_fields), std::memory_order_relaxed);
+    hud_size.store(preferences.hud_size, std::memory_order_relaxed);
+    hud_corner.store(preferences.hud_corner, std::memory_order_relaxed);
+    WantGpuTime();
+}
+// The GPU's busy share since the previous call, from the scheduler's timestamps (hud_gpu_time.h):
+// ~0u without them (the OpenGL renderer, a driver that refuses them, before the first results).
+unsigned GpuBusyPercent() {
+    static long long last_wall = 0;
+    static unsigned long long last_busy = 0;
+    if (Hud::gpu_time_failed.load(std::memory_order_relaxed) ||
+        Hud::gpu_results.load(std::memory_order_relaxed) == 0) {
+        last_wall = 0;
+        return ~0u;
+    }
+    const long long now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const unsigned long long busy = Hud::gpu_busy_ns.load(std::memory_order_relaxed);
+    const bool first = last_wall == 0;
+    const long long wall = now - last_wall;
+    const unsigned long long work = busy - last_busy;
+    last_wall = now;
+    last_busy = busy;
+    return first ? ~0u : HudPercent(static_cast<long long>(work), wall);
+}
+// What the overlay's line says about the machine (hud.h, HudMachine). Read once a second with the
+// emulation speed, and only for the fields shown, so a field that is off costs nothing.
+HudMachine MachineNow() {
+    HudMachine machine;
+    if (!hud_enabled.load(std::memory_order_relaxed)) return machine;
+    const uint32_t fields = hud_fields.load(std::memory_order_relaxed);
+    if (fields & kHudFieldCpu) machine.cpu = Performance::BusiestGuestCore();
+    if (fields & kHudFieldGpu) machine.gpu = GpuBusyPercent();
+    // The pool's largest free block, less the guest's headroom: what the caches see, and what the
+    // next large allocation needs (performance.h, graphics_memory_free). Not known off the console.
+    if (fields & kHudFieldMem)
+        if (const auto pool = Performance::graphics_memory_free.load(std::memory_order_relaxed)) machine.memory_free = pool();
+    return machine;
+}
 HudClock vulkan_hud_clock;
 // What the display is actually given: the guest's frames plus the ones frame generation
 // adds (CountPresentedFrame(), hud.h).
 HudClock vulkan_hud_output_clock;
 HudSnapshot vulkan_hud;
 double vulkan_hud_stats_time{}, vulkan_hud_speed{};
+HudMachine vulkan_hud_machine;
 // Read by the GPU thread, cleared by whichever thread composites the first guest frame (the
 // split GPU thread's back, when it runs).
 std::atomic<bool> vulkan_loading{};
@@ -316,11 +370,15 @@ public:
         if (system && now - last_stats >= 1.0) {
             const auto stats = system->GetAndResetPerfStats();
             speed_percent = stats.emulation_speed * 100.0;
+            machine = MachineNow();
             last_stats = now;
         }
-        const auto text = FormatHudText(clock, speed_percent, "OGL", RoomPingMilliseconds());
+        const auto text = FormatHudText(clock, speed_percent, "OGL", machine, RoomPingMilliseconds(),
+                                        hud_fields.load(std::memory_order_relaxed));
         if (hud_enabled.load(std::memory_order_relaxed)) DrawHud(text.data(), false);
+        const auto menu_drawn = DrawMenu();
         Check(eglSwapBuffers(display, surface), "eglSwapBuffers");
+        SwitchMenu::MarkPresented(menu_drawn);
     }
     void PresentLoading() {
         const double now = Now();
@@ -332,12 +390,14 @@ public:
             for (unsigned i = 0; i < dots; ++i) text[7 + i] = '.';
             DrawHud(text, true);
         }
+        const auto menu_drawn = DrawMenu();
         Check(eglSwapBuffers(display, surface), "loading swap");
+        SwitchMenu::MarkPresented(menu_drawn);
         if (loading_frames++ < 4) std::printf("EDEN_LOADING frame=%u scene=%d\n", loading_frames, !loading_failed);
     }
     // idle: the GPU thread has no game commands waiting (hud.h, LoadingPace).
     bool LoadingTick(bool idle) {
-        if (!loading) return false;
+        if (!loading && !SwitchMenu::Open()) return false;
         if (loading_pace.Due(Now(), idle)) PresentLoading();
         return true;
     }
@@ -406,8 +466,8 @@ private:
         glFlush();
         return true;
     }
-    void DrawHud(const char* text, bool startup) {
-        if (!window_owner) return;
+    bool DrawHud(const char* text, bool startup, bool menu = false, unsigned menu_row = 0) {
+        if (!window_owner) return false;
         // A separate context on this same thread isolates guest GL state and queries.
         Check(eglMakeCurrent(display, surface, surface, hud_context), "HUD current");
         SCOPE_EXIT { Cleanup(eglMakeCurrent(display, surface, surface, context), "HUD restore"); };
@@ -420,7 +480,7 @@ private:
                 "uniform float cell; out vec4 color;"
                 "void main(){ivec2 p=ivec2(gl_FragCoord.xy)-origin; bool ink=false;"
                 "if(p.x>=0&&p.y>=0){ivec2 c=ivec2(vec2(p)/cell);int i=c.x/4;int x=c.x%4;"
-                "if(i<28&&x<3&&c.y<5) ink=((glyphs[i]>>uint(c.y*3+2-x))&1u)!=0u;}"
+                "if(i<56&&x<3&&c.y<5) ink=((((glyphs[i>>1]>>uint((i&1)*16))&0x7fffu)>>uint(c.y*3+2-x))&1u)!=0u;}"
                 "color=startup!=0?(ink?vec4(0.7216,0.9490,0.0471,1.0):vec4(0.0196,0.0392,0.0039,1.0))"
                 ":(ink?vec4(0.9,0.95,1.0,1.0):vec4(0.025,0.04,0.075,0.5));}"};
             for (unsigned i = 0; i < 2; ++i) {
@@ -446,25 +506,53 @@ private:
         glUseProgram(hud_program);
         glBindVertexArray(hud_vao);
         // Laid out for a picture 1080 rows high (a glyph's cell is 4 pixels there) and scaled to
-        // the surface's.
+        // the surface's. The overlay's line goes where its settings put it (hud.h, PlaceHud: rows
+        // counted from the top, which OpenGL counts from the bottom); "LOADING" in the middle at 1x.
         const float scale = static_cast<float>(height) / 1080.0f;
         const auto units = [scale](int value) { return static_cast<int>(std::lround(value * scale)); };
         const int text_width = int(std::strlen(text)) * 16;
-        glViewport(startup ? 0 : units(16), startup ? 0 : height - units(64),
-                   startup ? width : units(text_width + 24), startup ? height : units(48));
+        HudSnapshot line{};
+        line.width = static_cast<uint32_t>(text_width + 24);
+        line.x = static_cast<uint32_t>(std::clamp(hud_corner.load(std::memory_order_relaxed), 0, kHudCorners - 1));
+        line.y = static_cast<uint32_t>(std::clamp(hud_size.load(std::memory_order_relaxed), 0, kHudSizes - 1));
+        const auto place = PlaceHud(line, static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+        const int menu_x = units(SwitchMenu::kX);
+        const int menu_y = units(SwitchMenu::kY + SwitchMenu::kStep * menu_row);
+        const int menu_w = units(SwitchMenu::kWidth);
+        const int menu_h = units(SwitchMenu::kHeight);
+        if (menu && (menu_w <= 0 || menu_h <= 0 || menu_x < 0 || menu_y < 0 ||
+                     menu_x + menu_w > width || menu_y + menu_h > height)) return false;
+        if (!startup && !menu && !place.shown) return false;
+        const float cell = 4.0f * static_cast<float>(startup || menu ? height : place.cell_rows) / 1080.0f;
+        if (startup)
+            glViewport(0, 0, width, height);
+        else if (menu)
+            glViewport(menu_x, height - menu_y - menu_h, menu_w, menu_h);
+        else
+            glViewport(int(place.box_x), height - int(place.box_y + place.box_h), int(place.box_w), int(place.box_h));
         const auto glyphs = HudText(text);
         glUniform1uiv(glGetUniformLocation(hud_program, "glyphs[0]"), glyphs.size(), glyphs.data());
         glUniform2i(glGetUniformLocation(hud_program, "origin"),
-                    startup ? (width - units(text_width)) / 2 : units(28),
-                    startup ? (height - units(20)) / 2 : height - units(50));
+                    startup ? (width - units(text_width)) / 2 :
+                        menu ? menu_x + units(12) : int(place.text_x),
+                    startup ? (height - units(20)) / 2 :
+                        menu ? height - menu_y - units(30) :
+                               height - int(place.text_y) - int(std::lround(5.0f * cell)));
         glUniform1i(glGetUniformLocation(hud_program, "startup"), startup);
-        glUniform1f(glGetUniformLocation(hud_program, "cell"), 4.0f * scale);
+        glUniform1f(glGetUniformLocation(hud_program, "cell"), cell);
         if (!startup) {
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         }
         glDrawArrays(GL_TRIANGLES, 0, 3);
         glFlush();
+        return true;
+    }
+    std::uint32_t DrawMenu() {
+        const auto state = SwitchMenu::view.load(std::memory_order_acquire);
+        return SwitchMenu::DrawAllRows(state, [this](unsigned row, std::string_view line) {
+            return DrawHud(line.data(), false, true, row);
+        });
     }
     unsigned presented_frames{}, loading_frames{};
     bool loading{true}, loading_failed{};
@@ -487,11 +575,13 @@ private:
     bool swap_interval_set{};
     Core::System* system{};
     double last_stats{}, speed_percent{100.0};
+    HudMachine machine;
 };
 }
 void ToggleHud() {
     const bool enabled = !hud_enabled.load(std::memory_order_relaxed);
     hud_enabled.store(enabled, std::memory_order_relaxed);
+    WantGpuTime();
     // A game with its own FPS overlay setting keeps the change for itself.
     const uint64_t title = session_title.load();
     if (auto game = LoadGameSettings(title); title && game.hud >= 0) {
@@ -506,24 +596,36 @@ void ToggleHud() {
 HudSnapshot GetVulkanHud() {
     return vulkan_loading || hud_enabled.load(std::memory_order_relaxed) ? vulkan_hud : HudSnapshot{};
 }
+HudSnapshot GetVulkanMenuLine(std::uint64_t state, unsigned row) {
+    HudSnapshot snapshot{};
+    if (static_cast<SwitchMenu::Page>(state & 0xffu) == SwitchMenu::Page::closed ||
+        row >= SwitchMenu::kRows) return snapshot;
+    snapshot.glyphs = HudText(SwitchMenu::Line(state, row));
+    snapshot.width = SwitchMenu::kWidth;
+    snapshot.x = SwitchMenu::kX;
+    snapshot.y = SwitchMenu::kY + row * SwitchMenu::kStep;
+    snapshot.loading = 0x80000000u; // menu overlay, not a loading scene
+    return snapshot;
+}
 // idle: the GPU thread has no game commands waiting (hud.h, LoadingPace).
 bool LoadingTick(VideoCore::RendererBase& renderer, bool idle) {
 #ifdef EDEN_PS5_VULKAN
-    if (vulkan_loading) {
+    if (vulkan_loading || SwitchMenu::Open()) {
         const double now = std::chrono::duration<double>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
         const bool first = vulkan_loading_start < 0;
         if (first) vulkan_loading_start = now;
         if (vulkan_loading_pace.Due(now, idle)) {
-            vulkan_hud = MakeLoadingSnapshot(now - vulkan_loading_start + LoadingCalm());
+            vulkan_hud = vulkan_loading ? MakeLoadingSnapshot(now - vulkan_loading_start + LoadingCalm()) : HudSnapshot{};
             // With the split GPU thread the renderer belongs to the back thread (gpu_split.h):
             // presenting from the front raced its composites in the scheduler and the blit
             // screen's layers (a descriptor set allocation failed, then a null layer crashed).
             // Send the present through the ring so it runs in order with the guest's work.
             if (auto& split = VideoCommon::GpuSplit::Get();
-                split.Active() && !VideoCommon::GpuSplit::IsBackThread()) {
+                split.Active() && !VideoCommon::GpuSplit::OnBackThread()) {
                 split.DeferFunction([&renderer] {
-                    if (vulkan_loading.load(std::memory_order_relaxed)) PresentVulkanLoading(renderer);
+                    if (vulkan_loading.load(std::memory_order_relaxed) || SwitchMenu::Open())
+                        PresentVulkanLoading(renderer);
                 });
                 split.Publish();
             } else {
@@ -542,13 +644,14 @@ GraphicsWindow::GraphicsWindow(bool use_vulkan) : vulkan(use_vulkan) {
     vulkan_loading_start = -1;
     vulkan_loading_frames = 0;
     vulkan_loading_pace = {};
-    hud_enabled.store(PreferencesFor(session_title.load()).hud, std::memory_order_relaxed);
+    LoadHudPreferences();
 #ifdef EDEN_PS5_VULKAN
     if (vulkan) {
         vulkan_hud_clock = {};
         vulkan_hud_output_clock = {};
         vulkan_hud = MakeLoadingSnapshot(0);
         vulkan_hud_stats_time = vulkan_hud_speed = 0;
+        vulkan_hud_machine = {};
         window_info.type = Core::Frontend::WindowSystemType::PS5;
         window_info.render_surface = this;
         // The frame the filter scales the game to (Settings > Video > Output resolution); the
@@ -657,12 +760,14 @@ void GraphicsWindow::OnFrameDisplayed() {
         vulkan_hud_clock.Present(now);
         if (system && now - vulkan_hud_stats_time >= 1.0) {
             vulkan_hud_speed = system->GetAndResetPerfStats().emulation_speed * 100.0;
+            vulkan_hud_machine = MachineNow();
             vulkan_hud_stats_time = now;
         }
         vulkan_hud =
-            MakeHudSnapshot(vulkan_hud_clock, vulkan_hud_output_clock, vulkan_hud_speed,
+            MakeHudSnapshot(vulkan_hud_clock, vulkan_hud_output_clock, vulkan_hud_speed, vulkan_hud_machine,
                             Eden::Display::output_millihertz.load(std::memory_order_relaxed) / 1000.0,
-                            RoomPingMilliseconds());
+                            RoomPingMilliseconds(), hud_fields.load(std::memory_order_relaxed),
+                            hud_size.load(std::memory_order_relaxed), hud_corner.load(std::memory_order_relaxed));
 #endif
         ++frame_total;
         Eden::OrderedReadTrace::Frame(frame_total,
@@ -701,6 +806,11 @@ void GraphicsWindow::OnFrameDisplayed() {
 #endif
                 Eden::Performance::ReportVulkan();
                 Eden::Performance::ReportGuestRun();
+                if (Eden::Fastmem::Window64Base() != 0) {
+                    char window64[1024];
+                    Eden::Fastmem::Window64Report(window64, sizeof(window64));
+                    std::printf("%s\n", window64);
+                }
 #ifdef EDEN_DEV_PROFILE
                 // Composite runs on the GPU thread, so its owner CPU clock is valid here.
                 Eden::Performance::ReportGpuThread(frame_total);

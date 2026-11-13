@@ -244,6 +244,14 @@ static bool ShelfPath(const std::string& file, std::string& path) {
 }
 
 static bool IsFolderGame(const std::string& file) { return file.size() > 4 && file.ends_with(".dir"); }
+// A game whose files are encrypted (.nsp, .xci): it needs prod.keys, and the firmware they are
+// checked with. NUP containers and extracted game folders (.dir) hold unencrypted ExeFS and
+// RomFS, which start without either.
+static bool IsEncryptedGame(const std::string& file) {
+    std::string extension = file.size() > 4 ? file.substr(file.size() - 4) : std::string{};
+    for (char& c : extension) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return extension != ".nup" && extension != ".dir";
+}
 static std::string RomPath(const std::string& file) {
     if (std::string shelf; ShelfPath(file, shelf)) return shelf;
     if (IsFolderGame(file)) {
@@ -797,15 +805,14 @@ EdenServices::~EdenServices() {
 pe::ui::Home EdenServices::home() {
     const std::lock_guard lock(bridge_);
     pe::ui::Home home;
-    home.setup_ready = setup_.empty() && Eden::FilesystemAccess();
+    // Keys and firmware are only needed by encrypted games (IsEncryptedGame): without them the
+    // library still lists every game and the unencrypted ones start.
+    home.setup_ready = Eden::FilesystemAccess();
+    home.keys_ready = setup_.empty();
     if (!Eden::FilesystemAccess()) {
         // No data is kept anywhere else (storage_paths.h): say so, and start nothing.
         home.status = fill(tr("EglantinePS5 could not get access to the console's storage, so it cannot read your settings, saves and games. Nothing was changed. Close EglantinePS5 and open it again. (Code {0})"),
                            {std::to_string(Eden::FilesystemAccessStatus())});
-    } else if (!home.setup_ready) {
-        home.status = fill(tr("Setup required: {0} Open Settings, Game files to choose the folder that holds your "
-                              "keys, firmware and roms folders (or add the files to {1}), then reopen EglantinePS5."),
-                           {SetupMessage(setup_), Eden::AssetsDir()});
     } else if (launch_error_.starts_with(Eden::Crash::kNotice)) {
         // The previous run ended with a crash report (headless/crash_report.h).
         home.status = fill(tr("EglantinePS5 stopped because of an error. A report was saved to {0}."),
@@ -835,7 +842,8 @@ pe::ui::Home EdenServices::home() {
         std::string title = GameTitle(home.last_file);
         std::string cover = CoverPath(home.last_file);
         bool has_cover = Eden::FileExists(cover);
-        if (home.last_exists && home.setup_ready && !has_cover) {
+        if (home.last_exists && home.setup_ready && !has_cover &&
+            (home.keys_ready || !IsEncryptedGame(home.last_file))) {
             cover = EnsureCover(home.last_file, &title);
             has_cover = !cover.empty();
         }
@@ -843,18 +851,22 @@ pe::ui::Home EdenServices::home() {
         home.last_caption = home.last_exists ? tr("Last game opened") :
                                                tr("ROM missing from the game files folder");
         home.last_caption_warning = !home.last_exists;
+        if (home.last_exists && !home.keys_ready && IsEncryptedGame(home.last_file)) {
+            home.last_caption = tr("Encrypted game: needs keys and firmware");
+            home.last_caption_warning = true;
+        }
         if (has_cover) home.last_cover = cover;
     }
     // The last game's update and DLC and the language it will use; when it does not offer the
     // chosen one, the caption says so.
-    if (home.setup_ready && home.last_exists) {
+    if (home.setup_ready && home.last_exists && (home.keys_ready || !IsEncryptedGame(home.last_file))) {
         eden_scan_addons(Eden::AssetsPath("updates").c_str(), Eden::AssetsPath("keys").c_str());
         const uint64_t title_id = eden_game_title_id(last_path.c_str());
         const GameLanguage language = LanguageFor(last_path, title_id, Eden::PreferencesFor(title_id).language);
         home.last_title_id = title_id;
         home.last_addons = AddOnSummary(title_id);
         home.last_language = language.label;
-        if (!language.note.empty()) {
+        if (!language.note.empty() && !home.last_caption_warning) {
             home.last_caption = language.note;
             home.last_caption_warning = true;
         }
@@ -870,10 +882,20 @@ pe::ui::Home EdenServices::home() {
         if (!IsFile(RomPath(name))) continue;
         home.recents.push_back({name, GameTitle(name), EnsureCover(name)});
     }
+    // Missing keys or firmware is said once no other problem is, and only before any game was
+    // played: the recent games take this place afterwards, and the encrypted ones say it on
+    // their own when chosen (launch_blocked).
+    if (home.status.empty() && Eden::FilesystemAccess() && !home.keys_ready && home.recents.empty())
+        home.status = fill(tr("Keys or firmware missing: {0} Unencrypted games (.nup files, extracted game "
+                              "folders) start without them. For .nsp and .xci games, open Settings, Game files "
+                              "to choose the folder that holds your keys, firmware and roms folders (or add the "
+                              "files to {1}), then reopen EglantinePS5."),
+                           {SetupMessage(setup_), Eden::AssetsDir()});
     const int installed = CountInstalledGames();
     home.system_status = fill(installed == 1 ? tr("{0} game installed") : tr("{0} games installed"),
                               {std::to_string(installed)}) +
-        "  /  " + (home.setup_ready ? tr("Firmware ready") : tr("Setup required"));
+        "  /  " + (!home.setup_ready ? tr("Setup required") :
+                   home.keys_ready ? tr("Firmware ready") : tr("Unencrypted games only"));
     return home;
 }
 
@@ -1076,7 +1098,7 @@ std::vector<pe::ui::Game> EdenServices::games() {
         std::string format = file.substr(dot + 1);
         std::transform(format.begin(), format.end(), format.begin(),
                        [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-        if (format != "NSP" && format != "XCI" && format != "DIR") continue;
+        if (format != "NSP" && format != "XCI" && format != "NUP" && format != "DIR") continue;
         const std::string path = RomPath(file);
         struct stat info {};
         if (stat(path.c_str(), &info) != 0 || !S_ISREG(info.st_mode)) continue;
@@ -1270,6 +1292,10 @@ bool EdenServices::set_docked(std::uint64_t title_id, bool docked) {
 static_assert(pe::ui::kGameButtons == Eden::kGameButtons && pe::ui::kPadButtons == Eden::kPadButtons &&
               pe::ui::kDefaultMapping == Eden::kDefaultMapping, "the launcher's button mapping differs");
 static_assert(std::tuple_size_v<decltype(pe::ui::GameSettings::performance)> == Eden::kPerformanceSwitches);
+// The launcher's overlay rows walk the field bits in order and its sizes and corners by index.
+static_assert(pe::ui::Preferences{}.hud_fields == static_cast<int>(Eden::kHudFieldDefault) &&
+              Eden::kHudFieldCount == 8 && Eden::kHudSizes == 3 && Eden::kHudCorners == 4,
+              "the launcher's FPS overlay options differ");
 
 pe::ui::GameSettings EdenServices::game_settings(std::uint64_t title_id) {
     const Eden::GameSettings saved = Eden::LoadGameSettings(title_id);
@@ -1324,6 +1350,9 @@ pe::ui::Preferences EdenServices::preferences() {
     const Eden::Preferences saved = Eden::LoadPreferences();
     pe::ui::Preferences result;
     result.hud = saved.hud;
+    result.hud_fields = saved.hud_fields;
+    result.hud_size = saved.hud_size;
+    result.hud_corner = saved.hud_corner;
     result.volume = saved.volume;
     result.mute = saved.mute;
     result.detailed_logging = saved.detailed_logging;
@@ -1334,15 +1363,19 @@ pe::ui::Preferences EdenServices::preferences() {
     result.refresh = saved.refresh;
     result.output = saved.output;
     result.frame_gen = saved.frame_gen;
+    result.skip_game_aa = saved.skip_game_aa;
     result.frame_gen_type = saved.frame_gen_type;
     result.frame_gen_target = saved.frame_gen_target;
     result.frame_gen_multiplier = saved.frame_gen_multiplier;
     result.vibration = saved.vibration;
+    result.vibration_strength = saved.vibration_strength;
     result.language = saved.language;
     result.menu_volume = saved.menu_volume;
     result.large_text = saved.large_text;
     result.high_contrast = saved.high_contrast;
     result.reduce_motion = saved.reduce_motion;
+    result.theme = saved.theme;
+    result.accent = saved.accent;
     // Settings > Performance: the general values (settings_store.h).
     const Eden::PerformanceSettings speed = Eden::LoadPerformance(0);
     result.block_list = speed.block_list;
@@ -1359,6 +1392,9 @@ pe::ui::Preferences EdenServices::preferences() {
 bool EdenServices::set_preferences(const pe::ui::Preferences& preferences) {
     Eden::Preferences value;
     value.hud = preferences.hud;
+    value.hud_fields = preferences.hud_fields;
+    value.hud_size = preferences.hud_size;
+    value.hud_corner = preferences.hud_corner;
     value.volume = preferences.volume;
     value.mute = preferences.mute;
     value.detailed_logging = preferences.detailed_logging;
@@ -1369,15 +1405,19 @@ bool EdenServices::set_preferences(const pe::ui::Preferences& preferences) {
     value.refresh = preferences.refresh;
     value.output = preferences.output;
     value.frame_gen = preferences.frame_gen;
+    value.skip_game_aa = preferences.skip_game_aa;
     value.frame_gen_type = preferences.frame_gen_type;
     value.frame_gen_target = preferences.frame_gen_target;
     value.frame_gen_multiplier = preferences.frame_gen_multiplier;
     value.vibration = preferences.vibration;
+    value.vibration_strength = preferences.vibration_strength;
     value.language = preferences.language;
     value.menu_volume = preferences.menu_volume;
     value.large_text = preferences.large_text;
     value.high_contrast = preferences.high_contrast;
     value.reduce_motion = preferences.reduce_motion;
+    value.theme = preferences.theme;
+    value.accent = preferences.accent;
     value.mapping = preferences.mapping;
     Eden::PerformanceSettings speed = Eden::LoadPerformance(0);
     speed.block_list = preferences.block_list;
@@ -1432,7 +1472,13 @@ std::string EdenServices::language_region(int language) {
 std::string EdenServices::setup_details() {
     return setup_.empty() ?
         tr("Keys and firmware: startup checks passed. Game-specific compatibility is checked at launch.") :
-        SetupMessage(setup_);
+        SetupMessage(setup_) + " " +
+            tr("Unencrypted games (.nup files, extracted game folders) start without keys and firmware.");
+}
+
+std::string EdenServices::launch_blocked(const std::string& file) {
+    if (setup_.empty() || !IsEncryptedGame(file)) return {};
+    return fill(tr("This game is encrypted and needs keys and firmware: {0}"), {SetupMessage(setup_)});
 }
 
 bool EdenServices::folders(const std::string& directory, std::vector<std::string>* names) {
@@ -1445,7 +1491,7 @@ pe::ui::FolderInfo EdenServices::folder_info(const std::string& directory) {
     pe::ui::FolderInfo info;
     info.keys = Eden::FileExists(JoinPath(directory, "keys/prod.keys"));
     info.firmware = CountFiles(JoinPath(directory, "firmware"), {".nca"});
-    info.games = CountFiles(JoinPath(directory, "roms"), {".nsp", ".xci"});
+    info.games = CountFiles(JoinPath(directory, "roms"), {".nsp", ".xci", ".nup"});
     return info;
 }
 

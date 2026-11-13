@@ -4,10 +4,11 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+from eglantine_source import EGLANTINE, source as eglantine_source  # the core, part of this repository
 
 root = Path(__file__).resolve().parents[1]
 cache = Path((root / '.local/headless-cache').read_text().strip())
-source = (cache / 'native-local/headless/emit_x64.cpp').read_text()
+source = eglantine_source('src/dynarmic/src/dynarmic/backend/x64/emit_x64.cpp')
 assert 'LocationDescriptorToFriendlyName(descriptor)' not in source
 methods = '\n'.join(re.search(r'void EmitX64::' + name + r'\([^\n]*\) \{.*?^}',
                              source, re.M | re.S).group()

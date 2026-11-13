@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "devices.h"
+#include "switch_menu_view.h"
 #include "controller_applet.h"
 #include "keyboard_applet.h"
 #include <condition_variable>
@@ -8,8 +9,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <numbers>
 #include <stdexcept>
+#include <thread>
 #include "common/fs/path_util.h"
 #include "common/input.h"
 #include "common/logging.h"
@@ -221,6 +224,125 @@ void CheckKeyboard() {
     std::puts("Text entry: entered, too short, cancelled, no cancel button, no keyboard, refused, confirmed, closed while open, inline PASS");
 }
 
+// The audio-haptics route's other ways (pad_haptics.h): F32 when S16 is refused, the motors when
+// the vibration port or advanced mode is refused or the port dies, and the retry that brings PCM
+// back. Every vibration port opened is closed.
+void CheckHaptics() {
+    using Common::Input::DriverResult;
+    using Type = Common::Input::VibrationAmplificationType;
+    const auto output = [](const char* params) { return Common::Input::CreateOutputDeviceFromString(params); };
+    // Without S16 the stream negotiates F32.
+    state.haptic_fail_format = 1;
+    {
+        Eden::Pad pad;
+        CHECK(pad.Open());
+        CHECK(state.haptic_open_formats.back() == 4);
+        auto left = output("engine:virtual_gamepad,port:0,pad:1");
+        const int haptic = 300 + state.haptic_opens;
+        CHECK(left->SetVibration({.low_amplitude = 1.0f, .low_frequency = 160.0f,
+                                  .type = Type::Exponential}) == DriverResult::Success);
+        CHECK(pad.Poll());
+        std::unique_lock lock(state.mutex);
+        state.haptic_audio[haptic].clear();
+        CHECK(state.wake.wait_for(lock, 2s, [&] { return state.haptic_audio[haptic].size() >= 2; }));
+        const auto& block = state.haptic_audio[haptic].back();
+        CHECK(block.size() == 512 * sizeof(float));
+        float loudest = 0;
+        for (std::size_t i = 0; i < 512; ++i) {
+            float value;
+            std::memcpy(&value, block.data() + i * sizeof(float), sizeof(value));
+            CHECK(value >= -1.0f && value <= 1.0f);
+            loudest = std::max(loudest, std::abs(value));
+        }
+        CHECK(loudest > 0.3f);
+    }
+    state.haptic_fail_format = 0;
+    // Without a vibration port the game rumbles the classic motors instead, as before haptics.
+    state.fail_haptic_open = true;
+    {
+        Eden::Pad pad;
+        CHECK(pad.Open());
+        CHECK((state.vibration_modes.back() == std::pair<int, int>{7, 2}));
+        auto left = output("engine:virtual_gamepad,port:0,pad:1");
+        auto right = output("engine:virtual_gamepad,port:0,pad:2");
+        auto handheld = output("engine:virtual_gamepad,port:8,pad:1");
+        state.vibrations.clear();
+        CHECK(pad.Poll()); CHECK(state.vibrations.empty());
+        CHECK(left->SetVibration({.low_amplitude = 1.0f, .type = Type::Exponential}) == DriverResult::Success);
+        CHECK(right->SetVibration({.high_amplitude = 0.5f, .type = Type::Linear}) == DriverResult::Success);
+        CHECK(pad.Poll()); CHECK(state.vibrations.size() == 1);
+        CHECK(state.vibrations[0].large_motor == 255); CHECK(state.vibrations[0].small_motor == 154);
+        CHECK(pad.Poll()); CHECK(state.vibrations.size() == 1); // Unchanged levels are not resent.
+        CHECK(left->SetVibration({}) == DriverResult::Success);
+        CHECK(right->SetVibration({}) == DriverResult::Success);
+        CHECK(pad.Poll()); CHECK(state.vibrations.size() == 2);
+        CHECK(state.vibrations[1].large_motor == 0); CHECK(state.vibrations[1].small_motor == 0);
+        CHECK(handheld->SetVibration({.high_amplitude = 1.0f, .type = Type::Exponential}) == DriverResult::Success);
+        CHECK(pad.Poll()); CHECK(state.vibrations.size() == 3); CHECK(state.vibrations[2].small_motor == 255);
+    }
+    state.fail_haptic_open = false;
+    // When the pad refuses advanced mode the port is closed and the motors take over.
+    state.vibration_mode_1_result = -1;
+    {
+        const int opens_before = state.haptic_opens, closes_before = state.haptic_closes;
+        Eden::Pad pad;
+        CHECK(pad.Open());
+        CHECK(state.haptic_opens == opens_before + 1);
+        CHECK(state.haptic_closes == closes_before + 1);
+        CHECK((state.vibration_modes[state.vibration_modes.size() - 2] == std::pair<int, int>{7, 1}));
+        CHECK((state.vibration_modes.back() == std::pair<int, int>{7, 2}));
+        auto left = output("engine:virtual_gamepad,port:0,pad:1");
+        state.vibrations.clear();
+        CHECK(left->SetVibration({.low_amplitude = 1.0f, .type = Type::Exponential}) == DriverResult::Success);
+        CHECK(pad.Poll());
+        CHECK(state.vibrations.size() == 1);
+        CHECK(state.vibrations[0].large_motor == 255);
+    }
+    state.vibration_mode_1_result = 0;
+    // A dead port falls back to the motors at the last levels; a retry later restores PCM.
+    {
+        Eden::Pad pad;
+        CHECK(pad.Open());
+        const int closes_before = state.haptic_closes;
+        auto left = output("engine:virtual_gamepad,port:0,pad:1");
+        auto right = output("engine:virtual_gamepad,port:0,pad:2");
+        CHECK(left->SetVibration({.low_amplitude = 1.0f, .type = Type::Exponential}) == DriverResult::Success);
+        CHECK(right->SetVibration({.high_amplitude = 0.5f, .type = Type::Linear}) == DriverResult::Success);
+        CHECK(pad.Poll());
+        const int haptic = 300 + state.haptic_opens;
+        {
+            std::unique_lock lock(state.mutex);
+            CHECK(state.wake.wait_for(lock, 2s, [&] { return !state.haptic_audio[haptic].empty(); }));
+            state.vibrations.clear();
+            const std::size_t modes_before = state.vibration_modes.size();
+            // A slow close, while the worker holds the routing lock, must not stall anything.
+            state.haptic_close_delay = 100ms;
+            state.fail_haptic_output = true;
+            CHECK(state.wake.wait_for(lock, 2s, [&] {
+                return !state.vibrations.empty() && state.haptic_closes == closes_before + 1;
+            }));
+            CHECK(state.vibrations.size() == 1);
+            CHECK(state.vibrations[0].large_motor == 255); CHECK(state.vibrations[0].small_motor == 154);
+            CHECK(state.vibration_modes.size() == modes_before + 1);
+            CHECK((state.vibration_modes.back() == std::pair<int, int>{7, 2}));
+            state.fail_haptic_output = false;
+            state.haptic_close_delay = 0ms;
+        }
+        const int opens_before = state.haptic_opens;
+        std::this_thread::sleep_for(2200ms); // the bring-up retry interval passes
+        CHECK(pad.Poll());
+        CHECK(state.haptic_opens == opens_before + 1);
+        CHECK((state.vibration_modes.back() == std::pair<int, int>{7, 1}));
+        const int revived = 300 + state.haptic_opens;
+        std::unique_lock lock(state.mutex);
+        CHECK(state.wake.wait_for(lock, 2s, [&] { return !state.haptic_audio[revived].empty(); }));
+    }
+    // The refused and the dead port close undrained; every other one drains first.
+    CHECK(state.haptic_opens == state.haptic_closes);
+    CHECK(state.haptic_drains == state.haptic_closes - 2);
+    std::puts("Audio haptics: PCM bands and curve, F32, motor fallback (no port, no advanced mode, dead port), retry PASS");
+}
+
 void CheckPad() {
     using namespace ps5::pad;
     Reject([] { Eden::Pad pad(1.0f); });
@@ -228,6 +350,12 @@ void CheckPad() {
         Eden::Pad pad;
         CHECK(pad.Open()); CHECK(pad.Open()); CHECK(state.pad_opens == 1);
         CHECK(state.last_pad_user == 84); // Foreground user differs from initial login (42).
+        // The pad's vibration port opens for the same user, S16 first, in advanced mode.
+        CHECK(state.haptic_opens == 1);
+        CHECK(state.haptic_open_users == std::vector<int>{84});
+        CHECK(state.haptic_open_formats == std::vector<int>{1});
+        CHECK(state.vibration_modes.size() == 1);
+        CHECK((state.vibration_modes[0] == std::pair<int, int>{7, 1}));
         auto sample = neutral_data(); sample.connected = 1;
         const auto consume = [&] { pad.Consume({&sample, 1}); };
         const std::pair<ButtonMask, int> mapping[] = {
@@ -269,7 +397,7 @@ void CheckPad() {
         };
         sample.triggers = {};
         sample.buttons = kButtonTouchPad | kButtonL1; consume();
-        CHECK(pad.TakeReturnToMenu()); CHECK(!pad.TakeReturnToMenu());
+        CHECK(!pad.TakeReturnToMenu()); CHECK(!pad.MenuOpen());
         CHECK(none_pressed());
         consume(); CHECK(!pad.TakeReturnToMenu());
         sample.buttons = 0; consume();
@@ -304,7 +432,37 @@ void CheckPad() {
         // Create is Minus directly, also while the touchpad is down.
         sample.buttons = kButtonCreate | kButtonTouchPad; consume(); CHECK(pad.Engine().GetButton({}, 11));
         sample.buttons = kButtonTouchPad; consume(); CHECK(none_pressed());
-        sample.buttons = kButtonTouchPad | kButtonL1; consume(); CHECK(pad.TakeReturnToMenu());
+        sample.buttons = kButtonTouchPad | kButtonL1; consume();
+        CHECK(!pad.TakeReturnToMenu()); CHECK(!pad.MenuOpen());
+        sample.buttons = 0; consume(); CHECK(none_pressed());
+        sample.buttons = kButtonTouchPad | kButtonOptions; consume();
+        CHECK(pad.MenuOpen()); CHECK(!pad.TakeReturnToMenu()); CHECK(none_pressed());
+        sample.buttons = kButtonCross; consume(); // frame not yet presented
+        CHECK(pad.MenuOpen()); CHECK(!pad.TakeReturnToMenu());
+        Eden::SwitchMenu::MarkPresented(Eden::SwitchMenu::Generation());
+        sample.buttons = 0; consume();
+        sample.buttons = kButtonDown; consume();
+        CHECK(pad.MenuOpen()); CHECK(none_pressed());
+        Eden::SwitchMenu::MarkPresented(Eden::SwitchMenu::Generation());
+        sample.buttons = 0; consume();
+        sample.buttons = kButtonCross; consume(); // opens warning, never exits yet
+        CHECK(pad.MenuOpen()); CHECK(!pad.TakeReturnToMenu());
+        Eden::SwitchMenu::MarkPresented(Eden::SwitchMenu::Generation());
+        sample.buttons = kButtonCross; consume(); // held key cannot confirm
+        CHECK(!pad.TakeReturnToMenu());
+        sample.buttons = 0; consume();
+        sample.buttons = kButtonCircle; consume(); // cancel back to choices
+        CHECK(pad.MenuOpen()); CHECK(!pad.TakeReturnToMenu());
+        Eden::SwitchMenu::MarkPresented(Eden::SwitchMenu::Generation());
+        sample.buttons = 0; consume();
+        sample.buttons = kButtonDown; consume();
+        Eden::SwitchMenu::MarkPresented(Eden::SwitchMenu::Generation());
+        sample.buttons = 0; consume();
+        sample.buttons = kButtonCross; consume();
+        Eden::SwitchMenu::MarkPresented(Eden::SwitchMenu::Generation());
+        sample.buttons = 0; consume();
+        sample.buttons = kButtonCross; consume();
+        CHECK(pad.TakeReturnToMenu()); CHECK(!pad.MenuOpen());
         sample.buttons = 0; consume(); CHECK(none_pressed());
 
         // A button mapping (button_mapping.h): A on Cross and B on Circle, ZL on the touchpad
@@ -326,7 +484,8 @@ void CheckPad() {
         for (int i = 0; i < 30; ++i) consume();
         CHECK(none_pressed());
         sample.buttons = kButtonCreate; consume(); CHECK(pad.Engine().GetButton({}, 8));
-        sample.buttons = kButtonTouchPad | kButtonL1; consume(); CHECK(pad.TakeReturnToMenu());
+        sample.buttons = kButtonTouchPad | kButtonL1; consume();
+        CHECK(!pad.TakeReturnToMenu()); CHECK(!pad.MenuOpen());
         sample.buttons = 0; consume(); CHECK(none_pressed());
         // A mapping that names a button twice is not taken: the usual one stays.
         auto twice = Eden::kDefaultMapping;
@@ -475,7 +634,8 @@ void CheckPad() {
             std::puts("Single Joy-Con held upright: its four buttons from the shapes, its stick from the arrows and either stick, shoulder buttons PASS");
         }
 
-        // Rumble: both guest sides on one DualSense; low band -> large motor, high band -> small.
+        // HD rumble over audio haptics: both guest sides on one DualSense; low band -> large voice,
+        // high band -> small voice, and no motor levels while the PCM route is up.
         {
             using Common::Input::DriverResult;
             using Type = Common::Input::VibrationAmplificationType;
@@ -483,19 +643,90 @@ void CheckPad() {
             auto right = Common::Input::CreateOutputDeviceFromString("engine:virtual_gamepad,port:0,pad:2");
             auto handheld = Common::Input::CreateOutputDeviceFromString("engine:virtual_gamepad,port:8,pad:1");
             CHECK(left->IsVibrationEnabled());
+            const int haptic = 300 + state.haptic_opens;
+            // Cleared after the poll that hands over new levels, so (but for one block in flight)
+            // what is captured next was rendered from them.
+            const auto clear_blocks = [&] {
+                std::scoped_lock lock(state.mutex);
+                state.haptic_audio[haptic].clear();
+            };
+            const auto wait_blocks = [&](std::size_t count) {
+                std::unique_lock lock(state.mutex);
+                CHECK(state.wake.wait_for(lock, 2s, [&] { return state.haptic_audio[haptic].size() >= count; }));
+            };
+            const auto last_peak = [&] {
+                std::scoped_lock lock(state.mutex);
+                const auto& blocks = state.haptic_audio[haptic];
+                CHECK(!blocks.empty() && blocks.back().size() == 512 * sizeof(s16));
+                int loudest = 0;
+                for (std::size_t i = 0; i < 512; ++i) {
+                    s16 value;
+                    std::memcpy(&value, blocks.back().data() + i * sizeof(s16), sizeof(value));
+                    loudest = std::max(loudest, std::abs(int{value}));
+                }
+                return loudest;
+            };
+            // The left channel's amplitude at one frequency over the last captured blocks.
+            const auto band_energy = [&](float hz, std::size_t blocks) {
+                std::vector<s16> channel;
+                {
+                    std::scoped_lock lock(state.mutex);
+                    const auto& captured = state.haptic_audio[haptic];
+                    CHECK(captured.size() >= blocks);
+                    for (auto it = captured.end() - static_cast<std::ptrdiff_t>(blocks); it != captured.end(); ++it) {
+                        CHECK(it->size() == 512 * sizeof(s16));
+                        for (std::size_t frame = 0; frame < 256; ++frame) {
+                            s16 value;
+                            std::memcpy(&value, it->data() + frame * 2 * sizeof(s16), sizeof(value));
+                            channel.push_back(value);
+                        }
+                    }
+                }
+                double sine = 0, cosine = 0;
+                for (std::size_t n = 0; n < channel.size(); ++n) {
+                    const double phase = 2 * std::numbers::pi * hz * static_cast<double>(n) / 48000;
+                    sine += channel[n] * std::sin(phase);
+                    cosine += channel[n] * std::cos(phase);
+                }
+                return 2 * std::sqrt(sine * sine + cosine * cosine) / static_cast<double>(channel.size());
+            };
             state.vibrations.clear();
             CHECK(pad.Poll()); CHECK(state.vibrations.empty());
-            CHECK(left->SetVibration({.low_amplitude = 1.0f, .type = Type::Exponential}) == DriverResult::Success);
-            CHECK(right->SetVibration({.high_amplitude = 0.5f, .type = Type::Linear}) == DriverResult::Success);
-            CHECK(pad.Poll()); CHECK(state.vibrations.size() == 1);
-            CHECK(state.vibrations[0].large_motor == 255); CHECK(state.vibrations[0].small_motor == 154);
-            CHECK(pad.Poll()); CHECK(state.vibrations.size() == 1); // Unchanged levels are not resent.
+            CHECK(left->SetVibration({.low_amplitude = 1.0f, .low_frequency = 160.0f,
+                                      .type = Type::Exponential}) == DriverResult::Success);
+            CHECK(right->SetVibration({.high_amplitude = 0.5f, .high_frequency = 320.0f,
+                                       .type = Type::Linear}) == DriverResult::Success);
+            CHECK(pad.Poll()); CHECK(state.vibrations.empty());
+            clear_blocks();
+            wait_blocks(32);
+            CHECK(band_energy(160.0f, 32) > 9000);
+            CHECK(band_energy(320.0f, 32) > 3500);
+            CHECK(band_energy(600.0f, 32) < 3000);
+            // The perceptual curve lifts small amplitudes on the PCM route too: 0.2 exponential
+            // plays near 0.39 (about 7000), not 0.2 (about 3640).
+            CHECK(left->SetVibration({.low_amplitude = 0.2f, .low_frequency = 160.0f,
+                                      .type = Type::Exponential}) == DriverResult::Success);
+            CHECK(right->SetVibration({}) == DriverResult::Success);
+            CHECK(pad.Poll()); CHECK(state.vibrations.empty());
+            clear_blocks();
+            wait_blocks(32);
+            CHECK(band_energy(160.0f, 32) > 5000);
+            CHECK(band_energy(160.0f, 32) < 11000);
+            CHECK(pad.Poll()); CHECK(state.vibrations.empty()); // Unchanged levels are not resent.
             CHECK(left->SetVibration({}) == DriverResult::Success);
             CHECK(right->SetVibration({}) == DriverResult::Success);
-            CHECK(pad.Poll()); CHECK(state.vibrations.size() == 2);
-            CHECK(state.vibrations[1].large_motor == 0); CHECK(state.vibrations[1].small_motor == 0);
-            CHECK(handheld->SetVibration({.high_amplitude = 1.0f, .type = Type::Exponential}) == DriverResult::Success);
-            CHECK(pad.Poll()); CHECK(state.vibrations.size() == 3); CHECK(state.vibrations[2].small_motor == 255);
+            CHECK(pad.Poll()); CHECK(state.vibrations.empty());
+            clear_blocks();
+            wait_blocks(8);
+            CHECK(last_peak() < 2000);
+            CHECK(handheld->SetVibration({.high_amplitude = 1.0f, .high_frequency = 320.0f,
+                                          .type = Type::Exponential}) == DriverResult::Success);
+            CHECK(pad.Poll());
+            clear_blocks();
+            wait_blocks(4);
+            CHECK(band_energy(320.0f, 4) > 3500);
+            CHECK(handheld->SetVibration({}) == DriverResult::Success);
+            CHECK(pad.Poll()); CHECK(state.vibrations.empty());
         }
 
         auto button = Common::Input::CreateInputDeviceFromString("engine:virtual_gamepad,port:0,button:0");
@@ -519,8 +750,10 @@ void CheckPad() {
         }
         state.read_result = 0; consume(); pad.Close(); pad.Close();
         CHECK(!pad.Engine().GetButton({}, 9));
-        CHECK(state.vibrations.size() == 4); // Closing stops the motors.
-        CHECK(state.vibrations[3].large_motor == 0); CHECK(state.vibrations[3].small_motor == 0);
+        // Closing leaves the pad on the compatible path with still motors.
+        CHECK(state.vibrations.size() == 1);
+        CHECK(state.vibrations[0].large_motor == 0); CHECK(state.vibrations[0].small_motor == 0);
+        CHECK((state.vibration_modes.back() == std::pair<int, int>{7, 2}));
         CHECK(state.pad_closes == 1); CHECK(state.user_terminations == 1);
     }
     state.user_init_result = -1; // A service owned by the embedding application.
@@ -533,6 +766,7 @@ void CheckPad() {
     { Eden::Pad pad; CHECK(!pad.Open()); }
     CHECK(state.user_terminations == 3); CHECK(state.pad_closes == 2);
     state.pad_open_result = 7;
+    CheckHaptics();
     std::puts("Pad mappings, a changed button mapping, calibration, motion, rumble, 64-sample edges, disconnect and ownership PASS");
 }
 

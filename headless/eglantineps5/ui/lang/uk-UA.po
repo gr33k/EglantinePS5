@@ -174,6 +174,14 @@ msgstr "Бікубічний"
 msgid "Bilinear"
 msgstr "Білінійний"
 
+#: pe/ui/settings.cpp
+msgid "Bottom left"
+msgstr "Зліва внизу"
+
+#: pe/ui/settings.cpp
+msgid "Bottom right"
+msgstr "Справа внизу"
+
 #. Button hint: move through the list.
 #: pe/ui/browse.cpp, pe/ui/multiplayer.cpp
 msgid "Browse"
@@ -746,6 +754,10 @@ msgstr "Ціль генерації кадрів"
 msgid "Frame gen type"
 msgstr "Тип генерації кадрів"
 
+#: pe/ui/settings.cpp
+msgid "Skip game anti-aliasing"
+msgstr "Пропускати згладжування гри"
+
 #: pe/ui/game_options.cpp, pe/ui/settings.cpp
 msgid "Frame generation"
 msgstr "Генерація кадрів"
@@ -987,6 +999,10 @@ msgid "LANGUAGES"
 msgstr "МОВИ"
 
 #: pe/ui/settings.cpp
+msgid "Large"
+msgstr "Великий"
+
+#: pe/ui/settings.cpp
 msgid "LARGER TEXT"
 msgstr "БІЛЬШИЙ ТЕКСТ"
 
@@ -1069,6 +1085,10 @@ msgstr "Налаштуйте під себе."
 #: pe/ui/settings.cpp
 msgid "Make the menu easier to see and follow."
 msgstr "Зробіть меню зручнішим для читання та сприйняття."
+
+#: pe/ui/settings.cpp
+msgid "Medium"
+msgstr "Середній"
 
 #: pe/ui/browse.cpp
 msgid "Menu sound effects made with ElevenLabs."
@@ -1306,6 +1326,14 @@ msgstr "РОЗДІЛЬНІСТЬ ВИВОДУ"
 #: pe/ui/settings.cpp
 msgid "Output resolution"
 msgstr "Роздільність виводу"
+
+#: pe/ui/settings.cpp
+msgid "Overlay corner"
+msgstr "Кут лічильника"
+
+#: pe/ui/settings.cpp
+msgid "Overlay size"
+msgstr "Розмір лічильника"
 
 #. Button hint: jump a page of the list (L1 / R1).
 #: pe/ui/browse.cpp, pe/ui/multiplayer.cpp, pe/ui/update.cpp
@@ -1553,6 +1581,10 @@ msgstr "ЧАСТОТА ОНОВЛЕННЯ"
 #: pe/ui/browse.cpp, pe/ui/settings.cpp
 msgid "REGION"
 msgstr "РЕГІОН"
+
+#: pe/ui/settings.cpp
+msgid "Regular"
+msgstr "Звичайний"
 
 #: pe/ui/profiles.cpp
 msgid "Remove"
@@ -2023,6 +2055,14 @@ msgstr "Ця кімната використовує іншу версію пр�
 #: eden_services.cpp
 msgid "To import, copy a Ryujinx folder to ryujinx/ or a save to save-import/{0}/, next to roms/."
 msgstr "Для імпорту скопіюйте папку Ryujinx у ryujinx/ або збереження в save-import/{0}/, поруч із roms/."
+
+#: pe/ui/settings.cpp
+msgid "Top left"
+msgstr "Зліва вгорі"
+
+#: pe/ui/settings.cpp
+msgid "Top right"
+msgstr "Справа вгорі"
 
 #. The DualSense controller's touch pad, pressed as a button. Use the name players know.
 #: pe/ui/game_options.cpp, pe/ui/settings.cpp

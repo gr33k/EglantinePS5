@@ -93,6 +93,8 @@ class Launcher
         multiplayer,
         preparing,    // a game on a network share, read before it starts (remote.cpp)
     };
+    // Settings > Controls' rows: vibration, its strength, then the button mapping (its own list).
+    static constexpr int kControlsMappingRow = 2;
     // The update dialog's steps: the offer, installing, stopping it, closing for the helper to
     // finish, and a failure.
     enum class UpdateStage : std::uint8_t
@@ -408,6 +410,7 @@ class Launcher
     std::array<tween::Spring, 7> switches_{};
     ListView video_rows_; // the Video dialog's rows (more than it shows)
     ListView performance_rows_; // the Performance dialog's rows (more than it shows)
+    ListView accessibility_rows_; // the Accessibility dialog's rows: the theme, then the switches
     GameSettings game_settings_;
     bool game_docked_ = true;
     SaveSource import_source_ = SaveSource::none; // what Save data could import for the game

@@ -174,6 +174,14 @@ msgstr "双三次"
 msgid "Bilinear"
 msgstr "双线性"
 
+#: pe/ui/settings.cpp
+msgid "Bottom left"
+msgstr "左下"
+
+#: pe/ui/settings.cpp
+msgid "Bottom right"
+msgstr "右下"
+
 #. Button hint: move through the list.
 #: pe/ui/browse.cpp, pe/ui/multiplayer.cpp
 msgid "Browse"
@@ -746,6 +754,10 @@ msgstr "补帧目标帧率"
 msgid "Frame gen type"
 msgstr "补帧方式"
 
+#: pe/ui/settings.cpp
+msgid "Skip game anti-aliasing"
+msgstr "跳过游戏抗锯齿"
+
 #: pe/ui/game_options.cpp, pe/ui/settings.cpp
 msgid "Frame generation"
 msgstr "帧生成"
@@ -987,6 +999,10 @@ msgid "LANGUAGES"
 msgstr "语言"
 
 #: pe/ui/settings.cpp
+msgid "Large"
+msgstr "大"
+
+#: pe/ui/settings.cpp
 msgid "LARGER TEXT"
 msgstr "放大文字"
 
@@ -1069,6 +1085,10 @@ msgstr "随心定制。"
 #: pe/ui/settings.cpp
 msgid "Make the menu easier to see and follow."
 msgstr "让菜单更易看清、更易操作。"
+
+#: pe/ui/settings.cpp
+msgid "Medium"
+msgstr "中"
 
 #: pe/ui/browse.cpp
 msgid "Menu sound effects made with ElevenLabs."
@@ -1306,6 +1326,14 @@ msgstr "输出分辨率"
 #: pe/ui/settings.cpp
 msgid "Output resolution"
 msgstr "输出分辨率"
+
+#: pe/ui/settings.cpp
+msgid "Overlay corner"
+msgstr "显示位置"
+
+#: pe/ui/settings.cpp
+msgid "Overlay size"
+msgstr "显示大小"
 
 #. Button hint: jump a page of the list (L1 / R1).
 #: pe/ui/browse.cpp, pe/ui/multiplayer.cpp, pe/ui/update.cpp
@@ -1553,6 +1581,10 @@ msgstr "刷新率"
 #: pe/ui/browse.cpp, pe/ui/settings.cpp
 msgid "REGION"
 msgstr "地区"
+
+#: pe/ui/settings.cpp
+msgid "Regular"
+msgstr "常规"
 
 #: pe/ui/profiles.cpp
 msgid "Remove"
@@ -2023,6 +2055,14 @@ msgstr "此房间使用不同的协议版本。"
 #: eden_services.cpp
 msgid "To import, copy a Ryujinx folder to ryujinx/ or a save to save-import/{0}/, next to roms/."
 msgstr "要导入，请将 Ryujinx 文件夹复制到 ryujinx/，或将存档复制到 save-import/{0}/（与 roms/ 同级）。"
+
+#: pe/ui/settings.cpp
+msgid "Top left"
+msgstr "左上"
+
+#: pe/ui/settings.cpp
+msgid "Top right"
+msgstr "右上"
 
 #. The DualSense controller's touch pad, pressed as a button. Use the name players know.
 #: pe/ui/game_options.cpp, pe/ui/settings.cpp

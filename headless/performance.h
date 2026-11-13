@@ -7,10 +7,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <mutex>
 #include <optional>
+#include <vector>
 #include "common/cpu_features.h"
+#if defined(__x86_64__)
+#include <x86intrin.h>
+#endif
 
 namespace Eden::Performance {
+// Emulated guest cores: Core::Hardware::NUM_CPU_CORES of the Eglantine base (Switch 2: 6).
+inline constexpr unsigned kGuestCores = 6;
 void RegisterWorker(const char* name);
 // Development: keep other named threads off guest cores 0-2 and their SMT siblings.
 void SetSecondaryPlacement(bool enabled);
@@ -47,6 +54,12 @@ enum class CpuPhase : unsigned { Kernel, Guest, Idle };
 struct alignas(64) CpuState { std::atomic<CpuPhase> phase{}; };
 inline std::array<CpuState, 6> cpu_state{};
 void SampleCpu(unsigned core, unsigned long long thread, unsigned long long pc, unsigned svc, unsigned fpcr);
+// The overlay's CPU field (hud.h, HudMachine::cpu): how busy the busiest emulated core was since
+// the previous call, as a percentage of one CPU; ~0u until two readings of a core are known, or
+// where the console's thread clocks cannot be read. A game is held back by its busiest core, which
+// a share of every CPU of the console would hide. Each call asks the cores for new readings, so
+// with the field off nothing more is read. One caller at a time (the overlay, once a second).
+unsigned BusiestGuestCore();
 struct alignas(64) Totals {
     std::atomic<unsigned long long> calls{}, nanoseconds{}, requested_bytes{};
 };
@@ -166,6 +179,32 @@ inline Totals guest_cpu_write, guest_cpu_read;
 // pinned alone, so the spin takes no CPU from the lock holder.
 inline std::atomic<unsigned> cache_lock_spins{256};
 inline std::atomic<unsigned long long> cache_lock_contended{0}, cache_lock_blocked{0};
+// Guest threads asleep on a cache lock now (YieldToGuests).
+inline std::atomic<unsigned> cache_lock_sleepers{0};
+// A guest write that leaves a buffer page tracked by the GPU caches costs a trip through
+// OnCPUWrite, mostly waiting for the buffer cache lock the GPU thread holds while it prepares each
+// draw (a game writing ~3,300 buffer pages per frame spent a third of two guest cores there). With
+// N > 0 the same trip also marks up to N following buffer pages CPU-modified, as their own first
+// write would, stopping at a page no buffer covers or one the GPU modified; texture and shader
+// pages stay tracked by their caches. A page marked ahead and never written is uploaded again
+// unchanged. That game wrote its buffers in order: 48.6 fps with 0, 58.7 with 16, 60 (its cap)
+// with 64, the trips falling from 159,000 to 4,500 a second. dev-settings cpu_write_ahead=N
+// (0-256) overrides it.
+inline std::atomic<unsigned> cpu_write_ahead{64};
+// The guest core of the write OnCPUWrite serves, set by HandleRasterizerWrite (headless/
+// CMakeLists.txt). Threads that are not guest cores share the last one, as Eden's dirty
+// managers do.
+inline thread_local unsigned cpu_write_core = kGuestCores - 1;
+// The GPU command interpreter (DmaPusher::ProcessCommands) calls out once per data word. An
+// incrementing write whose registers only store their value (no engine work until a later method
+// executes) is handed to the engine's pending-write list in one pass instead; registers that start
+// work keep the per-word path. Not while Eglantine's split GPU thread is active (its back thread
+// owns the engines; the words go through its ring). dev-settings dma_batch=off restores one call
+// per word (upstream).
+inline std::atomic<bool> dma_batch{true};
+// Development (EDEN_DEV_PROFILE): incrementing runs taken in one pass, their words, and the data
+// words that went through the per-word path. Written by the GPU thread only.
+inline std::atomic<unsigned long long> dma_batch_runs{}, dma_batch_words{}, dma_single_words{};
 template <typename Mutex>
 inline void GuestCacheLock(Mutex& mutex) {
     if (mutex.try_lock()) return;
@@ -175,7 +214,95 @@ inline void GuestCacheLock(Mutex& mutex) {
         if (mutex.try_lock()) return;
     }
     cache_lock_blocked.fetch_add(1, std::memory_order_relaxed);
+    cache_lock_sleepers.fetch_add(1, std::memory_order_acq_rel);
     mutex.lock();
+    cache_lock_sleepers.fetch_sub(1, std::memory_order_acq_rel);
+}
+// The GPU thread, holding neither cache lock, before it takes them for a draw: while a guest
+// thread sleeps on one, wait for it to have the lock (it wakes within a fraction of a
+// millisecond, and what it does under the lock is short). Bounded at about 2 ms, for a
+// sleeper that is held up by something else. One load of a counter when nobody waits.
+inline void YieldToGuests() {
+    if (cache_lock_sleepers.load(std::memory_order_relaxed) == 0) return;
+    const auto now = [] { return Common::g_wall_clock.GetTimeNS().count(); };
+    const long long until = now() + 2'000'000;
+    while (cache_lock_sleepers.load(std::memory_order_acquire) != 0 && now() < until)
+        for (int pause = 0; pause < 16; ++pause) __builtin_ia32_pause();
+}
+// A guest write to a GPU-tracked page whose cache lock the GPU thread holds (it holds both for each
+// draw's preparation, up to 40% of the time in heavy scenes, longer when a scene change creates and
+// uploads resources) no longer waits: OnCPUWrite queues it here and returns as for an untracked
+// write. Before its next draw, clear, dispatch or engine copy (MemoryManager::FlushCaching) the GPU
+// thread runs each queued write through OnCPUWrite as the guest would have, and a write to
+// GPU-modified data goes to that core's dirty ranges for the next fence, as upstream: so the caches
+// see the write no later than had the guest waited, and GPU-written data keeps upstream's handling.
+// dev-settings cpu_write_defer=off waits as before.
+inline std::atomic<bool> cpu_write_defer{true};
+// One queue per guest core (the last: other threads). Writes to the page of the queue's last
+// entry, made before the GPU thread takes the queue, widen that entry instead of trying the locks
+// again, so a burst of writes to a page costs one replay.
+struct DeferredWrite {
+    unsigned long long address, end;
+};
+struct DeferredQueue {
+    std::mutex mutex;
+    std::vector<DeferredWrite> writes;
+    unsigned taken = 0;  // Takes so far, under mutex.
+};
+inline std::array<DeferredQueue, kGuestCores> deferred_queues;
+inline thread_local unsigned long long deferred_page = ~0ULL;
+inline thread_local unsigned deferred_take = ~0U;
+// Set by the GPU thread while it runs the queues (FlushCaching): a replayed write waits for a
+// lock a guest thread holds rather than being queued again behind the draw it must precede.
+inline thread_local bool deferred_replay = false;
+// Set after a write is queued; the GPU thread clears it and runs the queues.
+inline std::atomic<bool> gpu_dirty_pending{false};
+inline std::atomic<unsigned long long> cpu_write_deferred{}, gpu_dirty_replays{};
+inline bool ExtendDeferredWrite(unsigned long long address, unsigned long long size, unsigned core) {
+    if ((address >> 12) != deferred_page) return false;
+    auto& queue = deferred_queues[core % kGuestCores];
+    std::scoped_lock lock{queue.mutex};
+    if (queue.taken != deferred_take || queue.writes.empty() || (queue.writes.back().address >> 12) != deferred_page)
+        return false;
+    auto& last = queue.writes.back();
+    last.address = std::min(last.address, address);
+    last.end = std::max(last.end, address + size);
+    return true;
+}
+inline void DeferWrite(unsigned long long address, unsigned long long size, unsigned core) {
+    auto& queue = deferred_queues[core % kGuestCores];
+    {
+        std::scoped_lock lock{queue.mutex};
+        queue.writes.push_back({address, address + size});
+        deferred_page = address >> 12;
+        deferred_take = queue.taken;
+    }
+    gpu_dirty_pending.store(true, std::memory_order_release);
+}
+inline std::vector<DeferredWrite> TakeDeferredWrites(unsigned core) {
+    std::vector<DeferredWrite> taken;
+    auto& queue = deferred_queues[core];
+    std::scoped_lock lock{queue.mutex};
+    taken.swap(queue.writes);
+    ++queue.taken;
+    return taken;
+}
+// A read of a GPU-tracked page whose texture cache lock is held answers "no download" without
+// waiting, as an empty area the read does not remember, so the next read checks again. A first read
+// of a newly GPU-written image can then miss its download: off by default (dev-settings
+// cpu_read_skip=on). In Eglantine the ordered read runs GetFlushArea on the GPU thread, so the
+// lock is held only by a guest write at that moment.
+inline std::atomic<bool> cpu_read_skip{false};
+inline std::atomic<unsigned long long> cpu_read_skipped{};
+template <typename Mutex>
+inline bool GuestCacheLockOrDefer(Mutex& mutex) {
+    if (!cpu_write_defer.load(std::memory_order_relaxed) || deferred_replay) {
+        GuestCacheLock(mutex);
+        return true;
+    }
+    if (mutex.try_lock()) return true;
+    cpu_write_deferred.fetch_add(1, std::memory_order_relaxed);
+    return false;
 }
 // Guest waits: nvhost_ctrl syncpoint event registration -> signal, and
 // BufferQueueProducer::DequeueBuffer waiting for a free buffer slot.
@@ -326,6 +453,23 @@ inline void WaitEnd(unsigned long long tid, unsigned reason, long long now_ns,
     }
 }
 inline long long NowNs() { return Common::g_wall_clock.GetTimeNS().count(); }
+// Durations on hot paths (a draw passes a dozen marks and a Timer): the TSC read inline and
+// unfenced, at the wall clock's rate. GetTimeNS is an out-of-line lfence; rdtsc; lfence (27 ns in a
+// loop on the console, and each lfence waits for everything before it); unfenced, a read may move a
+// few cycles, nothing over 5-second totals. Both ends of a duration come from here: only the rate
+// matters.
+inline long long DurationNs() {
+#if defined(__x86_64__)
+    static const unsigned long long factor = [] {
+        if (!Common::g_wall_clock.IsNative()) return 0ULL;
+        const auto ns = static_cast<unsigned long long>(NowNs());
+        const unsigned long long ticks = __rdtsc();
+        return ns < ticks ? static_cast<unsigned long long>((static_cast<unsigned __int128>(ns) << 64) / ticks) : 0ULL;
+    }();
+    if (factor) return static_cast<long long>((static_cast<unsigned __int128>(__rdtsc()) * factor) >> 64);
+#endif
+    return NowNs();
+}
 // Dispatch latency: how long a thread sat runnable before a host core entered RunThread on it.
 // MainThread blocks ~419 us per handoff against a worker that is itself blocked, while cores 1
 // and 2 are idle for most of the frame, so that gap is either the worker's own work or the time
@@ -364,6 +508,14 @@ void RecordHle(const char* service, unsigned command, long long ns);
 // direct memory (what the next allocation needs) is under kShortMemory.
 // dev-settings gc_dirty=upstream restores Eden's rule.
 inline std::atomic<bool> gc_keep_dirty{true};
+// The collector's per-run budget counts evictions, not visits (tools/
+// prepare-vulkan-port.py): skipped images used to burn it and stop the scan,
+// so kept images shielded everything behind them. dev-settings gc_scan=upstream
+// restores Eden's visit counting.
+inline std::atomic<bool> gc_count_visits{false};
+// GPU thread only: the collector's pass over costly images long unused while the pool is short
+// (tools/prepare-vulkan-port.py), which may take them.
+inline bool gc_old_costly = false;
 inline std::atomic<bool> graphics_memory_short{false};
 // 1 GiB: the pool is the CPU's too, and the largest thing a game asked of it at once was a block of
 // 486 MiB (a texture array of 121 layers, decoded before it is uploaded). With less here the collector
@@ -396,6 +548,8 @@ inline std::atomic<bool (*)()> graphics_memory_probe{nullptr};
 // The kernel's count of the guest's mapped physical memory, installed while a game runs (main.cpp):
 // the memory report tells it from the slots the sparse backing committed.
 inline std::atomic<unsigned long long (*)()> guest_kernel_memory{nullptr};
+// Per guest-kernel pool: what the kernel hands out and the host memory behind the pool (main.cpp).
+inline std::atomic<void (*)()> guest_pool_report{nullptr};
 // Graphics memory still free: the largest block of the direct memory pool, which is what the
 // driver's next allocation can be given. Installed by the PS5 build (performance.cpp).
 //
@@ -408,6 +562,25 @@ inline std::atomic<unsigned long long (*)()> guest_kernel_memory{nullptr};
 // the driver's count.
 inline std::atomic<unsigned long long (*)()> graphics_memory_free{nullptr};
 inline std::atomic<bool> graphics_usage_from_pool{true};
+// The pool is short now (the probe above): the texture collector then collects as if past its
+// first mark. Switch 2 titles set the marks near the driver's device memory, which on the console
+// is the pool the guest's memory also takes, so use stayed under them while the pool ran out
+// (Mario Kart World: 5.4 GB of textures against a 5.5 GB mark, then no block for 42 MiB).
+inline bool GraphicsMemoryIsShort() {
+    const auto probe = graphics_memory_probe.load(std::memory_order_relaxed);
+    return probe && probe();
+}
+// Under this much free memory (graphics_memory_free: the largest free block less the guest's
+// headroom; 1 while a guest write waits for a block) the pool is critical: the collector then
+// takes what 10 frames left unused, costly images included only past its own critical mark.
+// Short but not critical, it takes what 600 frames left unused (EDEN_NX2_TC_SHORT_AGE): taking
+// everything 10 frames left unused recreated 1,000-2,400 images per 600 frames in Mario Kart
+// World's races. Half of kShortMemory, as ProsperoEden's 1 GiB is half of its 2 GiB short mark.
+inline constexpr std::size_t kCriticalMemory = kShortMemory / 2;
+inline bool GraphicsMemoryIsCritical() {
+    const auto free = graphics_memory_free.load(std::memory_order_relaxed);
+    return free && free() < kCriticalMemory;
+}
 // GPU thread only (the collector).
 inline bool KeepDirtyTextures() {
     if (!gc_keep_dirty.load(std::memory_order_relaxed)) return false;
@@ -435,12 +608,18 @@ struct IdleCounters {
     std::atomic<unsigned long long> wakes{0}, wake_ns{0}, wake_max_ns{0};
 };
 inline std::array<IdleCounters, 6> guest_idle{};
+// Frame pacing (backported from ProsperoEden; see also guest_clock.h).
 // PAUSE iterations a guest core spins on its interrupt flag before sleeping (~20 ns each on the
-// console). Guest job systems hand work between cores ~150 times a frame; sleeping on each
-// handoff put the host's thread wake-up latency on the critical path. 100 us (the default) took
-// a racing game's heavy phase from ~55 to ~59.6 FPS; dev-settings
-// idle_spin_us=N overrides it (0 sleeps at once).
-inline std::atomic<unsigned> idle_spin_iterations{5000};
+// console). Guest job systems hand work between cores thousands of times a second; sleeping on a
+// handoff puts the host's thread wake-up latency on the critical path. 100 us took a racing game's
+// heavy phase from ~55 to ~59.6 FPS; 500 us (the default) cut a tested game's requests for
+// 30 FPS from 23% to 15% of frames (sleeps per core 800 -> 330 a second). 2 ms cut them to 12% but
+// made some effects flicker. dev-settings idle_spin_us=N overrides it (0 sleeps at once).
+inline std::atomic<unsigned> idle_spin_iterations{25000};
+// Signal the guest vsync first and compose 1.5 ms later, so a frame the game queues in response
+// to the vsync is latched at that same vsync (headless/CMakeLists.txt, VI conductor; multicore
+// only). dev-settings compose_delay_us=N overrides it (0 = upstream order).
+inline std::atomic<int> compose_delay_us{1500};
 // Draws between the Vulkan rasterizer's hand-offs to its worker, minus one (a power of two minus
 // one; tools/prepare-vulkan-port.py). Upstream hands off every 8 draws; dev-settings
 // dispatch_draws=N (8 to 512) overrides the 64 used here.
@@ -496,14 +675,24 @@ void ReportHeap(const char* why);
 std::size_t TrimHeap(const char* why);
 inline std::atomic<unsigned> capture_passes{};
 
+// A Timer counts only when timers are on: in a development build (EDEN_DEV_PROFILE), a Mario Kart
+// diagnostics build (EDEN_MKW_DIAGNOSTICS) and a cost run (cost-run.txt), all set when a game
+// starts (headless/main.cpp). Only those builds' reports read the totals, and timers sit on hot
+// paths: one a draw on the GPU thread, one for every guest write of memory the GPU caches follow
+// (several thousand of each a frame in a large game). Elsewhere a Timer is one look at this flag.
+// `always` is for a timer a report of every build reads.
+inline std::atomic<bool> timers_on{false};
 class Timer {
 public:
-    explicit Timer(Totals& target, unsigned long long bytes = 0)
-        : totals(target), requested_bytes(bytes), start(Common::g_wall_clock.GetTimeNS()) {}
+    explicit Timer(Totals& target, unsigned long long bytes = 0, bool always = false)
+        : totals(target), requested_bytes(bytes),
+          on(always || timers_on.load(std::memory_order_relaxed)),
+          start(on ? DurationNs() : 0) {}
     Timer(const Timer&) = delete;
     Timer& operator=(const Timer&) = delete;
     ~Timer() {
-        const auto elapsed = (Common::g_wall_clock.GetTimeNS() - start).count();
+        if (!on) return;
+        const auto elapsed = DurationNs() - start;
         totals.nanoseconds.fetch_add(static_cast<unsigned long long>(elapsed), std::memory_order_relaxed);
         if (requested_bytes) totals.requested_bytes.fetch_add(requested_bytes, std::memory_order_relaxed);
         totals.calls.fetch_add(1, std::memory_order_relaxed);
@@ -511,7 +700,8 @@ public:
 private:
     Totals& totals;
     unsigned long long requested_bytes;
-    std::chrono::nanoseconds start;
+    bool on;
+    long long start;
 };
 
 // Accumulate one phase of a sequence under a single running clock instead of giving it a Timer:
@@ -526,10 +716,10 @@ private:
 // would measure from is not read either (MarkStart). A flag and not an #ifdef: this header
 // must read the same in every library that includes it.
 inline std::atomic<bool> draw_marks{false};
-inline long long MarkStart() { return draw_marks.load(std::memory_order_relaxed) ? NowNs() : 0; }
+inline long long MarkStart() { return draw_marks.load(std::memory_order_relaxed) ? DurationNs() : 0; }
 inline void Mark(Totals& totals, long long& since) {
     if (!draw_marks.load(std::memory_order_relaxed)) return;
-    const auto now = NowNs();
+    const auto now = DurationNs();
     const auto elapsed = now - since;
     since = now;
     totals.nanoseconds.fetch_add(static_cast<unsigned long long>(elapsed), std::memory_order_relaxed);
@@ -539,6 +729,13 @@ inline void Mark(Totals& totals, long long& since) {
 // Opt-in API wall times: calls may overlap across threads, so do not sum them as frame time.
 inline std::atomic<bool> vulkan_cost_enabled{false};
 inline std::array<Totals, 24> vulkan_api;
+// Large textures upload only the block rows guest writes changed (texture_partial.h): dev-settings
+// tex_partial=off, tex_partial_kb=N (smallest image, default 1 MiB), tex_partial_check=on (compare
+// each partial upload with a whole unswizzle). Counted: partial uploads, their bytes, checks, mismatches.
+inline std::atomic<bool> tex_partial{true}, tex_partial_check{false};
+inline std::atomic<unsigned long long> tex_partial_min{1ULL << 20};
+inline std::atomic<unsigned long long> tex_partial_uploads{}, tex_partial_bytes{}, tex_partial_checks{},
+    tex_partial_mismatches{};
 inline std::optional<Timer> VulkanTimer(unsigned index) {
     if (vulkan_cost_enabled.load(std::memory_order_relaxed))
         return std::optional<Timer>{std::in_place, vulkan_api.at(index)};

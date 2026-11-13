@@ -5,11 +5,11 @@
 Dynarmic builds a table of 4096 lists from its ~640 A64 (and ~260 A32) instruction patterns the
 first time a block is translated. Upstream parses every pattern's bit string again for each of
 the 4096 lists: about half a second on the first compilation, on the guest core that asked for
-it. The port parses each pattern once (headless/CMakeLists.txt, decoder tables).
+it. Ours parses each pattern once (Eglantine/src/dynarmic/.../decoder/a64.h and arm.h).
 
 This runs the host build's cold-compilation benchmark (eden-memory-check --cold-compile): three
 times the same 8192 blocks, each in a new JIT. Only the first builds the table, so it may not
-take much longer than the others. It also checks that both derived decoders have the one-parse
+take much longer than the others. It also checks that both decoders have the one-parse
 form and list the handlers in upstream's order.
 """
 from pathlib import Path
@@ -19,7 +19,7 @@ import subprocess
 root = Path(__file__).resolve().parents[1]
 cache = Path((root / '.local/headless-cache').read_text().strip())
 for name in ('A64/decoder/a64.h', 'A32/decoder/arm.h'):
-    derived = (cache / 'build/headless/include/dynarmic/frontend' / name).read_text()
+    derived = (root / 'Eglantine/src/dynarmic/src/dynarmic/frontend' / name).read_text()
     assert 'for (size_t i = 0; i < t.size(); ++i) {\n#define INST' not in derived, name
     assert 'all.emplace_back(' in derived and 't[i].push_back(e);' in derived, name
 

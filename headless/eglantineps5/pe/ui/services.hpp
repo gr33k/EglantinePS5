@@ -67,7 +67,7 @@ struct UpdateStatus
 struct Game
 {
     std::string name;
-    std::string format; // "NSP" or "XCI"
+    std::string format; // "NSP", "XCI", "NUP" or "DIR"
     std::string size;   // "1.2 GB"
     std::string file;   // its name in the games folder
     std::string cover;  // image path; empty without cover art
@@ -237,7 +237,10 @@ struct Recent
 // The home screen's content.
 struct Home
 {
-    bool setup_ready = false;
+    bool setup_ready = false; // the game files folder can be read: games are listed and can start
+    // Keys and firmware passed their startup checks. Without them only unencrypted games start
+    // (NUP containers, extracted game folders); .nsp and .xci need them (Services::launch_blocked).
+    bool keys_ready = false;
     std::string status;    // a setup or launch problem; empty when there is none
     bool launch_failed = false; // the status is about the game that just failed to start
     std::string last_file; // the last game played; empty before the first one
@@ -285,6 +288,12 @@ struct Profile
 struct Preferences
 {
     bool hud = true;
+    // The FPS overlay's look: what its line shows (a bit per field, hud.h's kHudField*, from the
+    // renderer up to the ping), its size (0 1x, 1 1.5x, 2 2x) and corner (top left, top right,
+    // bottom left, bottom right).
+    int hud_fields = 0xcf; // all but CPU and GPU: settings_store.h's default
+    int hud_size = 0;
+    int hud_corner = 0;
     int volume = 100; // game volume, 0-100
     bool mute = false;
     bool detailed_logging = false;
@@ -301,12 +310,17 @@ struct Preferences
     int frame_gen_target = 0;      // index into kFrameGenTargetKeys: 0 auto, then 60/90/120/144/240
     int frame_gen_multiplier = 0;  // index into kFrameGenMultiplierKeys: 2x, 3x, 4x
     bool vibration = true;
+    int vibration_strength = 100; // percent of what a game asks for: 25, 50, 75 or 100
     int language = 0;
     int menu_volume = 70; // launcher sounds, 0-100
+    bool skip_game_aa = true; // Video: skip a game's tensor anti-aliasing network (Ocarina of Time)
     // Accessibility: how the launcher itself is shown (theme.hpp, Look).
     bool large_text = false;
     bool high_contrast = false;
     bool reduce_motion = false;
+    // The launcher's theme and accent preset, by id (theme.hpp); "" is the theme's own accent.
+    std::string theme = "eglantine";
+    std::string accent;
     // Performance: speed against accuracy, for every game.
     bool block_list = false;    // compile the code of earlier sessions ahead
     bool async_shaders = false; // draw before a new shader is ready
@@ -427,6 +441,12 @@ class Services
     virtual bool game_exists(const std::string &)
     {
         return true;
+    }
+    // Why a game cannot start with this setup (an encrypted one while keys or firmware are
+    // missing), in the player's language; empty when it can.
+    virtual std::string launch_blocked(const std::string &)
+    {
+        return {};
     }
     virtual bool docked(std::uint64_t title_id) = 0;
     virtual bool set_docked(std::uint64_t title_id, bool docked) = 0;

@@ -2,6 +2,12 @@
 """Exercise the actual GPU timestamp probe with observable Vulkan operations."""
 from pathlib import Path
 import subprocess,tempfile
+from eglantine_source import source as eglantine_source  # the core, part of this repository
+def probe_section():
+    """The scheduler's GPU-time probe: its first anonymous namespace (Eglantine/'s vk_scheduler.cpp)."""
+    text = eglantine_source('src/video_core/renderer_vulkan/vk_scheduler.cpp')
+    start = text.index('namespace {\n// GPU execution time:')
+    return text[start:text.index('\n} // namespace\n', start) + len('\n} // namespace\n')]
 root=Path(__file__).resolve().parents[1]
 code=r'''
 #include <algorithm>
@@ -56,7 +62,7 @@ struct Device {
  const Physical& GetPhysical()const{return physical;}
  unsigned GetGraphicsFamily()const{return 0;}
 };
-'''+f'\n#include "{root}/headless/submission_origin.h"\n'+(root/'headless/gpu_time_probe.inc').read_text()+r'''
+'''+f'\n#include "{root}/headless/hud_gpu_time.h"\n#include "{root}/headless/submission_origin.h"\n'+probe_section()+r'''
 int main(){Device d;vk::CommandBuffer cmd;
  Eden::DevVulkan::gpu_time=true;
  auto caller=reinterpret_cast<const void*>(uintptr_t(0x1234));
@@ -88,10 +94,22 @@ int main(){Device d;vk::CommandBuffer cmd;
  for(unsigned i=0;i<GpuTimeProbe::SLOTS;++i){GpuTimeBegin(d,cmd);GpuTimeEnd(cmd);}
  auto resets=state.resets;GpuTimeBegin(d,cmd);GpuTimeEnd(cmd);
  assert(gpu_time.failed&&state.resets==resets&&gpu_time.next==GpuTimeProbe::SLOTS);
+ assert(Eden::Hud::gpu_time_failed); // the overlay's GPU field shows "--"
  GpuTimeReset(d);assert(state.destroys==2);
  state.bits=0;GpuTimeBegin(d,cmd);assert(gpu_time.failed&&!gpu_time.pool);GpuTimeReset(d);
  state.bits=64;state.period=0;GpuTimeBegin(d,cmd);assert(gpu_time.failed&&!gpu_time.pool);GpuTimeReset(d);
  state.period=1;state.ready=true;GpuTimeBegin(d,cmd);assert(gpu_time.pool&&!gpu_time.failed);GpuTimeReset(d);
+ // The overlay alone (hud_gpu_time.h): the probe runs and adds to the overlay's totals, prints
+ // nothing, and a submission begun while it asked is closed after it stops asking.
+ Eden::DevVulkan::gpu_time=false;Eden::Hud::gpu_time_wanted=true;state.bits=8;state.period=2;state.ready=true;
+ const auto busy=Eden::Hud::gpu_busy_ns.load(),results=Eden::Hud::gpu_results.load();
+ GpuTimeBegin(d,cmd);assert(gpu_time.pool&&!Eden::Hud::gpu_time_failed);GpuTimeEnd(cmd);
+ GpuTimeBegin(d,cmd);Eden::Hud::gpu_time_wanted=false;auto writes=state.writes;GpuTimeEnd(cmd);assert(state.writes==writes+1);
+ writes=state.writes;GpuTimeBegin(d,cmd);GpuTimeEnd(cmd);assert(state.writes==writes&&gpu_time.next==2);
+ gpu_time.report=std::chrono::steady_clock::now()-std::chrono::seconds{6};
+ GpuTimeCollect(d); // pending results drain although nobody asks any more
+ assert(Eden::Hud::gpu_results==results+1&&Eden::Hud::gpu_busy_ns==busy+26&&gpu_time.busy_ns==0);
+ GpuTimeReset(d);
  assert(state.creates==state.destroys);state.alive=false; // no query pool may outlive its device
 }
 '''
@@ -99,4 +117,4 @@ with tempfile.TemporaryDirectory(prefix='gpu-time-probe-')as temp:
  p=Path(temp);(p/'check.cpp').write_text(code)
  subprocess.run(['clang++-18','-std=c++20','-O1','-g','-pthread','-fsanitize=address,undefined',str(p/'check.cpp'),'-o',str(p/'check')],check=True)
  subprocess.run([str(p/'check')],check=True,timeout=10)
-print('GPU timestamp probe PASS: disabled path, thread-local origin scopes, bounded caller counts, readiness without wait, timestamp wrap, bounded ring, reset/relaunch and pool-before-device destruction')
+print('GPU timestamp probe PASS: disabled path, overlay-only timing, thread-local origin scopes, bounded caller counts, readiness without wait, timestamp wrap, bounded ring, reset/relaunch and pool-before-device destruction')

@@ -174,6 +174,14 @@ msgstr "Bicubique"
 msgid "Bilinear"
 msgstr "Bilinéaire"
 
+#: pe/ui/settings.cpp
+msgid "Bottom left"
+msgstr "En bas à gauche"
+
+#: pe/ui/settings.cpp
+msgid "Bottom right"
+msgstr "En bas à droite"
+
 #. Button hint: move through the list.
 #: pe/ui/browse.cpp, pe/ui/multiplayer.cpp
 msgid "Browse"
@@ -746,6 +754,10 @@ msgstr "Cible de génération d'images"
 msgid "Frame gen type"
 msgstr "Type de génération d'images"
 
+#: pe/ui/settings.cpp
+msgid "Skip game anti-aliasing"
+msgstr "Ignorer l'anticrénelage du jeu"
+
 #: pe/ui/game_options.cpp, pe/ui/settings.cpp
 msgid "Frame generation"
 msgstr "Génération d'images"
@@ -987,6 +999,10 @@ msgid "LANGUAGES"
 msgstr "LANGUES"
 
 #: pe/ui/settings.cpp
+msgid "Large"
+msgstr "Grand"
+
+#: pe/ui/settings.cpp
 msgid "LARGER TEXT"
 msgstr "TEXTE PLUS GRAND"
 
@@ -1069,6 +1085,10 @@ msgstr "À votre façon."
 #: pe/ui/settings.cpp
 msgid "Make the menu easier to see and follow."
 msgstr "Rendez le menu plus lisible et plus facile à suivre."
+
+#: pe/ui/settings.cpp
+msgid "Medium"
+msgstr "Moyen"
 
 #: pe/ui/browse.cpp
 msgid "Menu sound effects made with ElevenLabs."
@@ -1306,6 +1326,14 @@ msgstr "RÉSOLUTION DE SORTIE"
 #: pe/ui/settings.cpp
 msgid "Output resolution"
 msgstr "Résolution de sortie"
+
+#: pe/ui/settings.cpp
+msgid "Overlay corner"
+msgstr "Coin du compteur"
+
+#: pe/ui/settings.cpp
+msgid "Overlay size"
+msgstr "Taille du compteur"
 
 #. Button hint: jump a page of the list (L1 / R1).
 #: pe/ui/browse.cpp, pe/ui/multiplayer.cpp, pe/ui/update.cpp
@@ -1553,6 +1581,10 @@ msgstr "FRÉQUENCE DE RAFRAÎCHISSEMENT"
 #: pe/ui/browse.cpp, pe/ui/settings.cpp
 msgid "REGION"
 msgstr "RÉGION"
+
+#: pe/ui/settings.cpp
+msgid "Regular"
+msgstr "Normal"
 
 #: pe/ui/profiles.cpp
 msgid "Remove"
@@ -2023,6 +2055,14 @@ msgstr "Ce salon utilise une autre version du protocole."
 #: eden_services.cpp
 msgid "To import, copy a Ryujinx folder to ryujinx/ or a save to save-import/{0}/, next to roms/."
 msgstr "Pour importer, copiez un dossier Ryujinx dans ryujinx/ ou une sauvegarde dans save-import/{0}/, à côté de roms/."
+
+#: pe/ui/settings.cpp
+msgid "Top left"
+msgstr "En haut à gauche"
+
+#: pe/ui/settings.cpp
+msgid "Top right"
+msgstr "En haut à droite"
 
 #. The DualSense controller's touch pad, pressed as a button. Use the name players know.
 #: pe/ui/game_options.cpp, pe/ui/settings.cpp

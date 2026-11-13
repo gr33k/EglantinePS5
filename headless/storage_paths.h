@@ -18,6 +18,7 @@ namespace Eden {
 inline constexpr const char* kDataDir = "/data/eglantineps5";
 inline constexpr const char* kDefaultAssetsDir = "/data/eglantineps5";
 inline constexpr const char* kInstallDir = "/data/homebrew/PPSA98515";
+inline bool& EmuHubProviderMode() { static bool enabled = false; return enabled; }
 
 // Filesystem access requested at startup: -1 not requested, 0 granted, otherwise the
 // elevation::Status that refused it.
@@ -45,6 +46,17 @@ inline constexpr const char* kMountedAppDir = "/system_ex/app/PPSA98515";
 // install folder. The mount follows ShadowMountPlus: an app on a USB drive is found there although
 // /data/homebrew may hold nothing or an older copy.
 inline const std::string& AppDir() {
+    if (EmuHubProviderMode()) {
+        static const std::string provider_directory = [] {
+            for (const char* candidate : {"/app0/providers/switch2",
+                    "/system_ex/app/PPSA91337/providers/switch2",
+                    "/data/homebrew/PPSA91337/providers/switch2",
+                    "/mnt/sandbox/PPSA91337_000/app0/providers/switch2"})
+                if (FileExists(std::string{candidate} + "/eboot.bin")) return std::string{candidate};
+            return std::string{}; // Never use standalone title or frontend app files.
+        }();
+        return provider_directory;
+    }
     static const std::string directory = [] {
         if (!FilesystemAccess()) return std::string{"/app0"};
         for (const char* candidate : {"/app0", kMountedAppDir, kInstallDir, "/mnt/sandbox/PPSA98515_000/app0"})

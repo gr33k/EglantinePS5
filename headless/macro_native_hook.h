@@ -9,9 +9,12 @@ namespace Eden::MacroNative {
 enum class Mode { Off, On, Check };
 inline Mode GetMode() {
     static const Mode mode = [] {
+        // On by default: only uploaded macros whose SHA-256 matches a signed Mario Kart World
+        // layout are replaced, so every other title keeps the JIT. EDEN_NX2_MME_NATIVE=0 turns it
+        // off, =check compares on copies and keeps the JIT (docs/MKW-NATIVE-MACROS.txt).
         const char* value = std::getenv("EDEN_NX2_MME_NATIVE");
-        return !value || value[0] == '0' ? Mode::Off :
-               std::strcmp(value, "check") == 0 ? Mode::Check : Mode::On;
+        if (!value || !*value) return Mode::On;
+        return value[0] == '0' ? Mode::Off : std::strcmp(value, "check") == 0 ? Mode::Check : Mode::On;
     }();
     return mode;
 }

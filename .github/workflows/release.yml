@@ -70,10 +70,8 @@ jobs:
             /opt/hostedtoolcache/Ruby
           df -h "$GITHUB_WORKSPACE"
 
+      # The emulator source, Eglantine/, is part of this repository.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # The emulator source is the Eglantine submodule.
-          submodules: true
 
       - name: Locate the caches
         run: |
@@ -83,6 +81,7 @@ jobs:
           {
             echo "CACHE_ROOT=$cache_root"
             echo "RADV_NATIVE=$(dirname "$GITHUB_WORKSPACE")/mihawk-vulkan-review/.deps/native"
+            echo "RADV_WORK=$(dirname "$GITHUB_WORKSPACE")/mihawk-vulkan-review/.deps/work"
             echo "EGLANTINEPS5_DEPS_CACHE=$cache_root/downloads"
             echo "CCACHE_DIR=$cache_root/ccache"
             echo "XDG_CACHE_HOME=$cache_root/xdg"
@@ -129,6 +128,9 @@ jobs:
       # After `make deps`: a restored RADV folder would otherwise stand in for the git checkout
       # it lives in, and deps.py would not fetch that checkout. With the driver go the Payload
       # SDK and zlib its build sets up beside it: the final link takes libraries from that SDK.
+      # The NIR backend (headless/nir_backend.cmake) compiles against the driver's own Mesa
+      # headers, source and generated: they go with it (radv-4; radv-3 had none, so a restored
+      # driver left the backend's configuration failing).
       - name: Restore the RADV driver
         id: radv
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
@@ -138,7 +140,12 @@ jobs:
             ${{ env.RADV_NATIVE }}/ps5-payload-sdk
             ${{ env.RADV_NATIVE }}/zlib
             build/radv-isolated
-          key: radv-3-${{ hashFiles('tools/deps.json', 'tools/patch-radv-wsi.py', 'tools/build-radv-dependencies.sh', 'tools/isolate-radv.py', 'tools/ci/ubuntu-24.04-packages.txt', 'tools/ci/setup-ubuntu-24.04.sh') }}
+            ${{ env.RADV_WORK }}/radv-src/**/*.h
+            ${{ env.RADV_WORK }}/radv-src/**/*.hpp
+            ${{ env.RADV_WORK }}/radv-src/**/*.inc
+            ${{ env.RADV_WORK }}/radv-build-ps5-release/**/*.h
+            ${{ env.RADV_WORK }}/radv-build-ps5-release/**/*.inc
+          key: radv-4-${{ hashFiles('tools/deps.json', 'tools/patch-radv-wsi.py', 'tools/build-radv-dependencies.sh', 'tools/isolate-radv.py', 'tools/ci/ubuntu-24.04-packages.txt', 'tools/ci/setup-ubuntu-24.04.sh') }}
 
       - name: Restore ccache
         id: ccache
@@ -208,7 +215,12 @@ jobs:
             ${{ env.RADV_NATIVE }}/ps5-payload-sdk
             ${{ env.RADV_NATIVE }}/zlib
             build/radv-isolated
-          key: radv-3-${{ hashFiles('tools/deps.json', 'tools/patch-radv-wsi.py', 'tools/build-radv-dependencies.sh', 'tools/isolate-radv.py', 'tools/ci/ubuntu-24.04-packages.txt', 'tools/ci/setup-ubuntu-24.04.sh') }}
+            ${{ env.RADV_WORK }}/radv-src/**/*.h
+            ${{ env.RADV_WORK }}/radv-src/**/*.hpp
+            ${{ env.RADV_WORK }}/radv-src/**/*.inc
+            ${{ env.RADV_WORK }}/radv-build-ps5-release/**/*.h
+            ${{ env.RADV_WORK }}/radv-build-ps5-release/**/*.inc
+          key: radv-4-${{ hashFiles('tools/deps.json', 'tools/patch-radv-wsi.py', 'tools/build-radv-dependencies.sh', 'tools/isolate-radv.py', 'tools/ci/ubuntu-24.04-packages.txt', 'tools/ci/setup-ubuntu-24.04.sh') }}
 
       - name: Match the tag to the package version
         if: startsWith(github.ref, 'refs/tags/')

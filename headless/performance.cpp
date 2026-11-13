@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <atomic>
 #include "performance.h"
 #include "crash_report.h"
+#include "hang_stacks.h"
+#include "hud.h"
 #include "stall_watchdog.h"
 #include "../src/fastmem.h"
 #include "common/cpu_features.h"
@@ -30,6 +33,12 @@
 #endif
 #ifdef PS5_NATIVE
 #include <sys/param.h>
+#include "common/fs/file.h"
+#include "core/hle/kernel/svc/svc_memory_stats.h"
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/resource.h>
 #include <sys/cpuset.h>
 #endif
 
@@ -154,11 +163,59 @@ void PcSignal(int, siginfo_t*, void* context) {
 }
 #endif
 #ifdef PS5_NATIVE
+// Whether logical CPUs 0 and 1 are one physical core, by timing. Four multiply chains on each of
+// two CPUs at once: siblings take the core's one multiplier in turns and need about twice as long
+// as two CPUs of different cores. The shortest of three runs of each pair, for whatever else runs
+// meanwhile. (CheckWorkerTopology asks this where CPUID does not tell the cores apart.)
+// (Backported from ProsperoEden.)
+long long PairLoopNs(unsigned cpu_a, unsigned cpu_b) {
+    std::atomic<int> ready{0};
+    std::atomic<bool> go{false};
+    std::array<long long, 2> elapsed{-1, -1};
+    const auto body = [&](unsigned cpu, unsigned slot) {
+        cpuset_t one{};
+        CPU_SET(cpu, &one);
+        const bool placed = cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_TID, -1, 8, &one) == 0;
+        sched_yield();
+        ready.fetch_add(1, std::memory_order_release);
+        if (!placed) return;
+        // Bounded: threads of one priority are not time-sliced here.
+        for (unsigned spins = 0; !go.load(std::memory_order_acquire) && spins < 200'000'000; ++spins) {}
+        const long long begin = NowNs();
+        unsigned long long a = cpu + 1, b = 3, c = 5, d = 7;
+        for (unsigned i = 0; i < 1'500'000; ++i) {
+            a = a * 6364136223846793005ULL + 1;
+            b = b * 2862933555777941757ULL + 3;
+            c = c * 3202034522624059733ULL + 5;
+            d = d * 1442695040888963407ULL + 7;
+        }
+        volatile unsigned long long sink = a ^ b ^ c ^ d;
+        (void)sink;
+        elapsed[slot] = NowNs() - begin;
+    };
+    std::thread first(body, cpu_a, 0u), second(body, cpu_b, 1u);
+    while (ready.load(std::memory_order_acquire) < 2) std::this_thread::yield();
+    go.store(true, std::memory_order_release);
+    first.join();
+    second.join();
+    return elapsed[0] < 0 || elapsed[1] < 0 ? -1 : std::max(elapsed[0], elapsed[1]);
+}
+bool AdjacentCpusShareCore() {
+    long long together = -1, apart = -1;
+    for (int run = 0; run < 3; ++run) {
+        const long long pair = PairLoopNs(0, 1), others = PairLoopNs(0, 2);
+        if (pair > 0 && (together < 0 || pair < together)) together = pair;
+        if (others > 0 && (apart < 0 || others < apart)) apart = others;
+    }
+    const bool share = together > 0 && apart > 0 && together * 4 >= apart * 5;
+    std::printf("EDEN_WORKER_SMT cpus_0_1_ns=%lld cpus_0_2_ns=%lld share=%d\n", together, apart, share);
+    return share;
+}
 std::array<unsigned, 5> worker_cpus{};
 bool worker_topology_ready = false;
 // Physical core (x2APIC above the SMT shift) of each allowed CPU, -1 if unknown.
 std::array<int, 64> cpu_core = [] { std::array<int, 64> c{}; c.fill(-1); return c; }();
-// CPUs outside guest cores 0-2 and their SMT siblings, and not the GPU thread CPU.
+// CPUs that are neither pinned nor the GPU thread's SMT sibling.
 unsigned long long secondary_cpus = 0;
 // The process CPU set seen by the topology probe (threads may inherit narrower sets).
 cpuset_t topology_allowed{};
@@ -166,17 +223,27 @@ bool topology_allowed_valid = false;
 std::atomic<bool> placement_secondary{false};
 std::atomic<unsigned> secondary_reports{};
 void CheckWorkerTopology() {
+    // Probe once per process. Later games start from a launcher thread that the first game's
+    // placement left on the secondary CPUs, where the probe finds too few cores.
+    if (worker_topology_ready) {
+        std::printf("EDEN_WORKER_TOPOLOGY ready=1 cached=1 cpus=%u,%u,%u,%u,%u\n",
+            worker_cpus[0], worker_cpus[1], worker_cpus[2], worker_cpus[3], worker_cpus[4]);
+        return;
+    }
     cpuset_t original{};
     if (__get_cpuid_max(0, nullptr) < 0xb ||
         cpuset_getaffinity(CPU_LEVEL_WHICH, CPU_WHICH_TID, -1, 8, &original)) return;
     std::array<unsigned, 5> cores{};
     unsigned count = 0;
-    bool changed = false;
+    bool changed = false, refused = false, measured = false;
     for (unsigned cpu = 0; cpu < 64; ++cpu) {
         if (!CPU_ISSET(cpu, &original)) continue;
         cpuset_t one{};
         CPU_SET(cpu, &one);
-        if (cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_TID, -1, 8, &one)) break;
+        if (cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_TID, -1, 8, &one)) {
+            refused = true;
+            break;
+        }
         changed = true;
         unsigned a, b, c, d;
         __cpuid_count(0xb, 0, a, b, c, d);
@@ -197,20 +264,48 @@ void CheckWorkerTopology() {
             std::memcmp(&original, &restored, 8))
             throw std::runtime_error("Cannot restore topology-probe thread affinity");
     }
+    // CPUID did not tell five physical cores apart: newer system software gives one answer for
+    // every CPU (a console with it ran every thread unpinned: a large open-world game at 20
+    // frames a second where a console with pinned threads made 26 to 29). Where CPUID does
+    // answer, logical CPUs 2n and 2n+1 are one core; a timing of two pairs says whether that
+    // holds here (AdjacentCpusShareCore), and then the same five CPUs are used.
+    if (!refused && count != cores.size()) {
+        unsigned even = 0;
+        for (unsigned cpu = 0; cpu < 64; cpu += 2) even += CPU_ISSET(cpu, &original) ? 1 : 0;
+        if (even >= cores.size() && CPU_ISSET(1, &original) && AdjacentCpusShareCore()) {
+            count = 0;
+            cpu_core.fill(-1);
+            for (unsigned cpu = 0; cpu < 64; ++cpu) {
+                if (!CPU_ISSET(cpu, &original)) continue;
+                cpu_core[cpu] = static_cast<int>(cpu / 2);
+                if ((cpu & 1) == 0 && count < cores.size()) {
+                    cores[count] = cpu / 2;
+                    worker_cpus[count++] = cpu;
+                }
+            }
+            measured = true;
+        }
+    }
     worker_topology_ready = count == cores.size();
     topology_allowed = original;
     topology_allowed_valid = true;
     if (worker_topology_ready) {
+        // Secondary threads share every CPU but the pinned ones and the GPU thread's whole core:
+        // its SMT sibling left idle made the GPU thread ~19% cheaper per draw in a race, +30% fps
+        // (ProsperoEden runs/place-*, 2026-11-02; secondary mask 1caa against 1e80, which kept the
+        // guest cores' siblings idle instead). The guest threads are ~45% busy, so sharing their
+        // siblings costs nothing measurable.
+        secondary_cpus = 0;
         for (unsigned cpu = 0; cpu < 64; ++cpu) {
             if (!CPU_ISSET(cpu, &original) || cpu_core[cpu] < 0) continue;
-            const bool guest_core = cpu_core[cpu] == static_cast<int>(cores[0]) ||
-                cpu_core[cpu] == static_cast<int>(cores[1]) || cpu_core[cpu] == static_cast<int>(cores[2]);
-            if (!guest_core && cpu != worker_cpus[3] && cpu != worker_cpus[4]) secondary_cpus |= 1ULL << cpu;
+            const bool pinned = std::find(worker_cpus.begin(), worker_cpus.end(), cpu) != worker_cpus.end();
+            if (!pinned && cpu_core[cpu] != static_cast<int>(cores[4])) secondary_cpus |= 1ULL << cpu;
         }
         std::printf("EDEN_WORKER_SECONDARY mask=%llx\n", secondary_cpus);
     }
-    std::printf("EDEN_WORKER_TOPOLOGY ready=%d distinct_cores=%u cpus=%u,%u,%u,%u,%u\n",
-        worker_topology_ready, count, worker_cpus[0], worker_cpus[1], worker_cpus[2], worker_cpus[3], worker_cpus[4]);
+    std::printf("EDEN_WORKER_TOPOLOGY ready=%d distinct_cores=%u cpus=%u,%u,%u,%u,%u measured=%d\n",
+        worker_topology_ready, count, worker_cpus[0], worker_cpus[1], worker_cpus[2], worker_cpus[3], worker_cpus[4],
+        static_cast<int>(measured));
 }
 // EDEN_PS5_PLACE="CPUCore_4=1/GPUBack=10/VulkanWorker=12,13" (layout experiments; ; or / between entries): the CPUs a
 // thread of that name runs on, replacing its pin or the secondary mask. Read on each placement:
@@ -247,7 +342,41 @@ void PlaceSecondary(const char* name) {
     unsigned long long cpus = PlacementOverride(name);
     if (cpus == 0) {
         if (!placement_secondary.load(std::memory_order_relaxed) || !secondary_cpus) return;
-        cpus = secondary_cpus;
+        // With the split GPU thread on, its back gets a core of its own (the last one both of whose
+        // CPUs are secondary), the SMT sibling idle: races drew 83k draws/s against 73k with the
+        // back among the secondary threads (ProsperoEden runs/rp-*, rc-*, 2026-11-02).
+        // dev-settings back_cpu=<n> picks the CPU. (EDEN_NX2_SPLIT=0 leaves the core shared.)
+        static const int back_core = [] {
+            if (const char* split = std::getenv("EDEN_NX2_SPLIT"); split != nullptr && split[0] == '0') return -1;
+            for (int cpu = 62; cpu >= 0; cpu -= 2)
+                if (((secondary_cpus >> cpu) & 3) == 3) return cpu;
+            return -1;
+        }();
+        // dev-settings secondary_mask=<hex> (EDEN_SECONDARY_MASK): the CPUs the secondary threads
+        // share instead. Read at the first placement, after the dev settings.
+        // The back's core is kept from the other secondary threads only once the back exists:
+        // Eglantine starts the split only below High GPU accuracy, and threads placed before it
+        // keep the whole set (they may share the core with it).
+        static std::atomic<bool> back_started{false};
+        if (std::strcmp(name, "GPUBack") == 0) back_started.store(true, std::memory_order_relaxed);
+        static const unsigned long long forced_shared = [] {
+            const char* value = std::getenv("EDEN_SECONDARY_MASK");
+            return value != nullptr ? std::strtoull(value, nullptr, 16) : 0ULL;
+        }();
+        const unsigned long long shared =
+            forced_shared != 0 ? forced_shared
+            : back_core >= 0 && back_started.load(std::memory_order_relaxed) ? secondary_cpus & ~(3ULL << back_core)
+                                                                             : secondary_cpus;
+        static const long back_cpu = [] {
+            const char* value = std::getenv("EDEN_BACK_CPU");
+            return value != nullptr ? static_cast<long>(std::strtoul(value, nullptr, 10)) : long{back_core};
+        }();
+        // dev-settings pin=<thread name>:<cpu> (EDEN_PIN_<name>): that secondary thread on one CPU.
+        const char* const pin = std::getenv((std::string("EDEN_PIN_") + name).c_str());
+        const long own_cpu = pin != nullptr ? static_cast<long>(std::strtoul(pin, nullptr, 10))
+                             : std::strcmp(name, "GPUBack") == 0 ? back_cpu
+                                                                  : -1;
+        cpus = own_cpu >= 0 && own_cpu < 64 ? 1ULL << own_cpu : shared;
     }
     cpuset_t mask{};
     for (unsigned cpu = 0; cpu < 64; ++cpu)
@@ -388,6 +517,9 @@ extern "C" std::size_t eden_heap_large_held(unsigned* blocks) __attribute__((wea
 extern "C" std::size_t eden_heap_trim(void) __attribute__((weak));
 extern "C" void eden_heap_sites_report(void) __attribute__((weak));
 extern "C" void eden_heap_usage(std::size_t* held, std::size_t* in_use, std::size_t* returned) __attribute__((weak));
+extern "C" void eden_heap_slack(std::size_t*, std::size_t*, unsigned*, unsigned*) __attribute__((weak));
+extern "C" std::size_t eden_heap_arena_live __attribute__((weak));
+extern "C" unsigned eden_heap_arena_empty __attribute__((weak)), eden_heap_arena_quarter __attribute__((weak));
 extern "C" unsigned eden_guest_memory_wanted(void) __attribute__((weak));
 extern "C" void eden_guest_memory_reserve(std::size_t* held, std::size_t* target) __attribute__((weak));
 #ifdef PS5_NATIVE
@@ -400,10 +532,39 @@ extern "C" std::int32_t sceKernelDirectMemoryQuery(std::int64_t, int, DirectMemo
 #endif
 
 #ifdef PS5_NATIVE
+// Open file descriptors by type, against the process limit, and the IOFiles Eden holds by folder
+// (Common::FS::ReportOpenFiles): a handle leak shows as one count growing every 20 s.
+extern "C" void eden_fd_paths_report(FILE* out);
+static void ReportFileHandles() {
+    struct rlimit limit {};
+    getrlimit(RLIMIT_NOFILE, &limit);
+    const int top = static_cast<int>(std::min<rlim_t>(limit.rlim_cur > 0 ? limit.rlim_cur : 1024, 1024));
+    int regular = 0, sockets = 0, pipes = 0, other = 0, highest = -1;
+    for (int fd = 0; fd < top; ++fd) {
+        struct stat info {};
+        if (fstat(fd, &info) != 0) continue;
+        highest = fd;
+        if (S_ISREG(info.st_mode)) ++regular;
+        else if (S_ISSOCK(info.st_mode)) ++sockets;
+        else if (S_ISFIFO(info.st_mode)) ++pipes;
+        else ++other;
+    }
+    std::fprintf(stderr, "EDEN_FD open=%d regular=%d sockets=%d pipes=%d other=%d highest=%d limit=%lld\n",
+                 regular + sockets + pipes + other, regular, sockets, pipes, other, highest,
+                 static_cast<long long>(limit.rlim_cur));
+    ::Common::FS::ReportOpenFiles(stderr);
+    eden_fd_paths_report(stderr);
+}
+
 // The largest free block of direct memory is what the next graphics allocation needs. Looked at
 // again every 100 ms; called on the GPU thread by the texture collector (KeepDirtyTextures).
 static std::atomic<unsigned long long> largest_free_block{0};
+// The driver's own buffer bytes (RADV's PS5 winsys counter, renamed by tools/isolate-radv.py).
+extern "C" unsigned long long eden_radv_private_radv_ps5_allocated_bytes __attribute__((weak));
 static void RefreshFreeMemory() {
+#if defined(PS5_NATIVE) || defined(__linux__)
+    Eden::HangStacks::Beat();
+#endif
     static std::atomic<long long> checked_ns{0};
     const long long now = NowNs();
     if (const long long last = checked_ns.load(std::memory_order_relaxed); last != 0 && now - last < 100'000'000)
@@ -420,7 +581,7 @@ static void RefreshFreeMemory() {
     graphics_memory_short.store(view.short_memory, std::memory_order_relaxed);
     // The pool, the guest's memory and the heap in stderr.log every 20 s, to see what holds it.
     static std::atomic<long long> summary_ns{0};
-    if (now - summary_ns.load(std::memory_order_relaxed) >= 20'000'000'000) {
+    if (now - summary_ns.load(std::memory_order_relaxed) >= 10'000'000'000) {
         summary_ns.store(now, std::memory_order_relaxed);
         std::size_t guest_span = 0, guest_held = 0;
         ::Common::GuestMemoryUsage(&guest_span, &guest_held);
@@ -429,7 +590,15 @@ static void RefreshFreeMemory() {
                      " (the kernel maps %llu MiB)\n",
                      largest >> 20, int(view.short_memory), guest_held >> 20,
                      kernel_memory ? kernel_memory() >> 20 : 0ULL);
+        std::fprintf(stderr, "EDEN_MEMORY_PARTS t=%lld driver_mib=%llu guest_held_mib=%zu guest_span_mib=%zu\n",
+                     now / 1'000'000'000,
+                     &eden_radv_private_radv_ps5_allocated_bytes != nullptr
+                         ? __atomic_load_n(&eden_radv_private_radv_ps5_allocated_bytes, __ATOMIC_RELAXED) >> 20 : 0ULL,
+                     guest_held >> 20, guest_span >> 20);
         ReportHeap("every 20 s");
+        ReportFileHandles();
+        ::Kernel::Svc::MemoryStats::Report(stderr);
+        if (const auto pools = guest_pool_report.load(std::memory_order_relaxed)) pools();
     }
     // The heap's empty spaces go back to the pool while it is short (every 2 s at most).
     static std::atomic<long long> trimmed_ns{0};
@@ -482,6 +651,15 @@ void ReportHeap(const char* why) {
     std::fprintf(stderr, "[EglantinePS5] heap: holds %zu MiB (%zu MiB of pieces, %zu MiB in %u large blocks), "
                          "%zu MiB of it in use; %zu MiB given back so far (%s)\n",
                  held >> 20, (held - large) >> 20, large >> 20, large_blocks, in_use >> 20, returned >> 20, why);
+    if (eden_heap_slack) {
+        std::size_t tcache = 0, arenas = 0;
+        unsigned holders = 0, arena_count = 0;
+        eden_heap_slack(&tcache, &arenas, &holders, &arena_count);
+        std::fprintf(stderr, "EDEN_HEAP_SLACK tcache=%zuMiB arenas=%u (%zuMiB, %u threads; live %zuMiB, %u empty, %u under a quarter) spaces_outside_arenas=%zuMiB\n",
+                     tcache >> 20, arena_count, arenas >> 20, holders, eden_heap_arena_live >> 20,
+                     eden_heap_arena_empty, eden_heap_arena_quarter,
+                     ((held - large) > arenas ? (held - large) - arenas : 0) >> 20);
+    }
     if (eden_heap_sites_report) eden_heap_sites_report();
 }
 
@@ -575,12 +753,15 @@ void ReportGpuThread(unsigned frame) {
     // Cumulative totals; the analyzer takes deltas between consecutive reports.
     std::printf("EDEN_DEV_GPU frame=%u mono_ns=%lld cpu_ns=%lld idle_ns=%llu dispatch_calls=%llu "
                 "dispatch_ns=%llu drain_calls=%llu drain_ns=%llu present_calls=%llu present_ns=%llu "
-                "full_calls=%llu full_ns=%llu draws=%llu\n", frame, ClockNs(CLOCK_MONOTONIC),
+                "full_calls=%llu full_ns=%llu draws=%llu dma_runs=%llu dma_run_words=%llu dma_words=%llu\n",
+                frame, ClockNs(CLOCK_MONOTONIC),
                 owner_cpu_clock_valid ? ClockNs(CLOCK_THREAD_CPUTIME_ID) : -static_cast<long long>(ENOTSUP),
                 load(gpu_queue_wait, false), load(gpu_dispatch, true), load(gpu_dispatch, false),
                 load(gpu_fence_drain, true), load(gpu_fence_drain, false),
                 load(gpu_present_wait, true), load(gpu_present_wait, false),
-                load(gpu_queue_full, true), load(gpu_queue_full, false), load(rasterizer_draw, true));
+                load(gpu_queue_full, true), load(gpu_queue_full, false), load(rasterizer_draw, true),
+                dma_batch_runs.load(std::memory_order_relaxed), dma_batch_words.load(std::memory_order_relaxed),
+                dma_single_words.load(std::memory_order_relaxed));
     // What the dispatch is made of: the draw path itself (RasterizerVulkan::PrepareDraw - both
     // cache locks, pipeline configure, dynamic state, the record) against the guest method
     // decoding that surrounds it, plus the dispatch's own three phases. A draw whose
@@ -674,8 +855,15 @@ void ReportGpuThread(unsigned frame) {
                 load(guest_sync_wait, true), load(guest_sync_wait, false),
                 load(guest_dequeue_wait, true), load(guest_dequeue_wait, false));
     std::printf(" ipc_calls=%llu ipc_ns=%llu", load(guest_ipc_wait, true), load(guest_ipc_wait, false));
+    std::printf(" tex_partial=%llu tex_partial_bytes=%llu tex_partial_checks=%llu tex_partial_mismatches=%llu",
+                tex_partial_uploads.load(std::memory_order_relaxed), tex_partial_bytes.load(std::memory_order_relaxed),
+                tex_partial_checks.load(std::memory_order_relaxed),
+                tex_partial_mismatches.load(std::memory_order_relaxed));
     std::printf(" cache_lock_contended=%llu cache_lock_blocked=%llu",
                 cache_lock_contended.load(std::memory_order_relaxed), cache_lock_blocked.load(std::memory_order_relaxed));
+    std::printf(" write_deferred=%llu dirty_replays=%llu read_skipped=%llu",
+                cpu_write_deferred.load(std::memory_order_relaxed), gpu_dirty_replays.load(std::memory_order_relaxed),
+                cpu_read_skipped.load(std::memory_order_relaxed));
     std::printf(" fs_file_calls=%llu fs_file_ns=%llu fs_file_bytes=%llu fs_storage_calls=%llu fs_storage_ns=%llu "
                 "fs_storage_bytes=%llu",
                 load(guest_fs_file, true), load(guest_fs_file, false),
@@ -763,6 +951,9 @@ void ReportGpuThread(unsigned frame) {
 }
 
 void RegisterWorker(const char* name) {
+#if defined(PS5_NATIVE) || defined(__linux__)
+    Eden::HangStacks::Note(name);  // EDEN_HANG_STACKS=1 (hang_stacks.h)
+#endif
 #ifdef PS5_NATIVE
     MkwNativeSample::Register(name);
 #endif
@@ -840,6 +1031,36 @@ void SampleCpu(unsigned core, unsigned long long thread, unsigned long long pc, 
         compilation[core].nanoseconds.load(std::memory_order_relaxed)};
     std::lock_guard lock(workers_mutex);
     cpu_samples[core] = sample;
+}
+
+unsigned BusiestGuestCore() {
+    // A core's CPU time can only be read by its own thread on the console, so each call asks the
+    // cores for a fresh reading (SampleCpu writes one when a core next leaves the guest's code) and
+    // sets each core's newest reading against the one the previous call saw. A core that wrote
+    // nothing since then is left out rather than counted as idle, as Snapshot leaves it.
+    struct Reading { long long mono = 0, cpu = 0; };
+    static std::array<Reading, kGuestCores> seen{};
+    std::array<CpuSample, kGuestCores> samples;
+    {
+        std::lock_guard lock(workers_mutex);
+        std::copy_n(cpu_samples.begin(), kGuestCores, samples.begin());
+    }
+    sample_epoch.fetch_add(1, std::memory_order_relaxed);  // the next readings, please
+    unsigned busiest = ~0u;
+    for (unsigned i = 0; i < kGuestCores; ++i) {
+        const CpuSample& sample = samples[i];
+        Reading& reading = seen[i];
+        if (sample.epoch == ~0u || sample.cpu_ns < 0) {
+            reading = {};
+            continue;
+        }
+        if (reading.mono != 0 && sample.mono_ns > reading.mono) {
+            const unsigned load = HudPercent(sample.cpu_ns - reading.cpu, sample.mono_ns - reading.mono);
+            busiest = busiest == ~0u ? load : std::max(busiest, load);
+        }
+        reading = {sample.mono_ns, sample.cpu_ns};
+    }
+    return busiest;
 }
 
 void Snapshot() {

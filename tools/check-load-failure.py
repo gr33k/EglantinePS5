@@ -1,8 +1,9 @@
 from pathlib import Path
 import subprocess,tempfile
+from eglantine_source import EGLANTINE, source as eglantine_source  # the core, part of this repository
 r=Path(__file__).resolve().parents[1]
 c=Path((r/'.local/headless-cache').read_text().strip())
-s=(c/'native-local/headless/core.cpp').read_text()
+s=eglantine_source('src/core/core.cpp')
 backing='    std::optional<Core::DeviceMemory> device_memory;'
 kernel='    Kernel::KernelCore kernel;'
 assert s.count(backing)==1 and s.index(backing)<s.index(kernel)
@@ -36,7 +37,9 @@ a=s.index('        if (init_result != SystemResultStatus::Success) {')
 b=s.index('        // Waiting for GPU', a)
 branch=s[a:b]
 assert 'process.reset();' in branch and branch.index('process.reset();') < branch.index('ShutdownMainProcess();')
-assert s.count('            process.reset();\n            ShutdownMainProcess();') == 2
+# Every failure path of Load releases the process before the kernel shuts down.
+pairs = s.count('            process.reset();\n            ShutdownMainProcess();')
+assert pairs >= 2 and pairs == s.count('            ShutdownMainProcess();'), pairs
 with tempfile.TemporaryDirectory(prefix='eden-process-order-') as tmp:
  p=Path(tmp);src=p/'test.cpp';exe=p/'test'
  src.write_text('''#include <memory>
@@ -65,22 +68,35 @@ provider=m.index('            FileSys::ManualContentProvider game_contents;\n')
 system=m.index('            Core::System system;\n')
 clear=m.index('            SCOPE_EXIT { game_contents.ClearAllEntries(); };\n')
 assert provider<system<clear and 'static FileSys::ManualContentProvider' not in m
+# Require the runtime binding in the fixture as well as the lifetime order.
+assert m[system:clear].count("system.SetFilesystem(std::make_shared<emuhub_direct_nup::HeldNupFilesystem>(held_nup));") == 1
 with tempfile.TemporaryDirectory(prefix='eden-contents-order-') as tmp:
  p=Path(tmp);src=p/'test.cpp';exe=p/'test'
  src.write_text('''#include <cassert>
 #include <memory>
 #include <vector>
+#include <string>
 bool filesystem_alive=false;
+namespace emuhub_direct_nup {
+ struct HeldNup { std::string Path() const { return "test.nup"; } };
+ struct HeldNupFilesystem { explicit HeldNupFilesystem(std::shared_ptr<HeldNup>) {} };
+}
 struct File { ~File() { assert(filesystem_alive); } };
 namespace FileSys { struct ManualContentProvider {
  std::vector<std::unique_ptr<File>> files;
  void ClearAllEntries() { files.clear(); }
 }; }
-namespace Core { struct System { System() { filesystem_alive=true; } ~System() { filesystem_alive=false; } }; }
+namespace Core { struct System {
+ System() { filesystem_alive=true; }
+ ~System() { filesystem_alive=false; }
+ void SetFilesystem(std::shared_ptr<emuhub_direct_nup::HeldNupFilesystem>) {}
+}; }
 template <class F> struct Exit { F f; ~Exit() { f(); } };
 struct MakeExit { template <class F> Exit<F> operator+(F f) { return {f}; } };
 #define SCOPE_EXIT auto scope_exit = MakeExit{} + [&]()
 int main() { for (int session=0; session<2; ++session) {
+ auto held_nup=std::make_shared<emuhub_direct_nup::HeldNup>();
+ std::string selected_game=held_nup->Path();
 '''+m[provider:clear]+'''            SCOPE_EXIT { game_contents.ClearAllEntries(); };
             game_contents.files.push_back(std::make_unique<File>());
  } }

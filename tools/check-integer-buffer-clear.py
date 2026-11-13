@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Check integer buffer-clear source formats, including the original regression."""
+"""Check integer buffer-clear source formats (Eglantine/), with the regression as a rejection control."""
 from pathlib import Path
 import re
+from eglantine_source import EGLANTINE, source as eglantine_source  # the core, part of this repository
 
 root = Path(__file__).resolve().parents[1]
 cache = Path((root / '.local/headless-cache').read_text().strip())
@@ -16,19 +17,17 @@ def check(source):
                        'GL_RGB_INTEGER', 'GL_RGBA_INTEGER')), call
     return len(calls)
 
-original = (cache / 'source/src/video_core/renderer_opengl/gl_buffer_cache.cpp').read_text()
-fixed = (cache / 'native-local/headless/gl_buffer_cache.cpp').read_text()
-assert fixed == original.replace('static_cast<GLsizeiptr>(size), GL_RED, GL_UNSIGNED_INT, &value);',
-                                'static_cast<GLsizeiptr>(size), GL_RED_INTEGER, GL_UNSIGNED_INT, &value);')
+fixed = eglantine_source('src/video_core/renderer_opengl/gl_buffer_cache.cpp')
+assert 'static_cast<GLsizeiptr>(size), GL_RED_INTEGER, GL_UNSIGNED_INT, &value);' in fixed
 assert check(fixed) == 1
-for bad in (original, fixed.replace('GL_RED_INTEGER', 'GL_RED')):
+for bad in (fixed.replace('GL_RED_INTEGER', 'GL_RED'),):
     try:
         check(bad)
     except AssertionError:
         pass
     else:
         raise AssertionError('Accepted integer clear with non-integer source format')
-for path in (cache / 'source/src/video_core').rglob('*.cpp'):
+for path in (EGLANTINE / 'src/video_core').rglob('*.cpp'):
     if path.name != 'gl_buffer_cache.cpp':
         check(path.read_text())
 print('Integer buffer clear format, sibling call sites and rejection controls PASS')

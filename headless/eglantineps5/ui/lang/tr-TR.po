@@ -174,6 +174,14 @@ msgstr "Bikübik"
 msgid "Bilinear"
 msgstr "Bilineer"
 
+#: pe/ui/settings.cpp
+msgid "Bottom left"
+msgstr "Sol alt"
+
+#: pe/ui/settings.cpp
+msgid "Bottom right"
+msgstr "Sağ alt"
+
 #. Button hint: move through the list.
 #: pe/ui/browse.cpp, pe/ui/multiplayer.cpp
 msgid "Browse"
@@ -746,6 +754,10 @@ msgstr "Kare üretimi hedefi"
 msgid "Frame gen type"
 msgstr "Kare üretimi türü"
 
+#: pe/ui/settings.cpp
+msgid "Skip game anti-aliasing"
+msgstr "Oyunun kenar yumuşatmasını atla"
+
 #: pe/ui/game_options.cpp, pe/ui/settings.cpp
 msgid "Frame generation"
 msgstr "Kare oluşturma"
@@ -987,6 +999,10 @@ msgid "LANGUAGES"
 msgstr "DİLLER"
 
 #: pe/ui/settings.cpp
+msgid "Large"
+msgstr "Büyük"
+
+#: pe/ui/settings.cpp
 msgid "LARGER TEXT"
 msgstr "BÜYÜK METİN"
 
@@ -1069,6 +1085,10 @@ msgstr "Kendinize göre ayarlayın."
 #: pe/ui/settings.cpp
 msgid "Make the menu easier to see and follow."
 msgstr "Menüyü görmeyi ve takip etmeyi kolaylaştırın."
+
+#: pe/ui/settings.cpp
+msgid "Medium"
+msgstr "Orta"
 
 #: pe/ui/browse.cpp
 msgid "Menu sound effects made with ElevenLabs."
@@ -1306,6 +1326,14 @@ msgstr "ÇIKIŞ ÇÖZÜNÜRLÜĞÜ"
 #: pe/ui/settings.cpp
 msgid "Output resolution"
 msgstr "Çıkış çözünürlüğü"
+
+#: pe/ui/settings.cpp
+msgid "Overlay corner"
+msgstr "Sayaç köşesi"
+
+#: pe/ui/settings.cpp
+msgid "Overlay size"
+msgstr "Sayaç boyutu"
 
 #. Button hint: jump a page of the list (L1 / R1).
 #: pe/ui/browse.cpp, pe/ui/multiplayer.cpp, pe/ui/update.cpp
@@ -1553,6 +1581,10 @@ msgstr "YENİLEME HIZI"
 #: pe/ui/browse.cpp, pe/ui/settings.cpp
 msgid "REGION"
 msgstr "BÖLGE"
+
+#: pe/ui/settings.cpp
+msgid "Regular"
+msgstr "Normal"
 
 #: pe/ui/profiles.cpp
 msgid "Remove"
@@ -2023,6 +2055,14 @@ msgstr "Bu oda farklı bir protokol sürümü kullanıyor."
 #: eden_services.cpp
 msgid "To import, copy a Ryujinx folder to ryujinx/ or a save to save-import/{0}/, next to roms/."
 msgstr "İçe aktarmak için roms/ yanındaki ryujinx/ içine bir Ryujinx klasörü veya save-import/{0}/ içine bir kayıt kopyalayın."
+
+#: pe/ui/settings.cpp
+msgid "Top left"
+msgstr "Sol üst"
+
+#: pe/ui/settings.cpp
+msgid "Top right"
+msgstr "Sağ üst"
 
 #. The DualSense controller's touch pad, pressed as a button. Use the name players know.
 #: pe/ui/game_options.cpp, pe/ui/settings.cpp

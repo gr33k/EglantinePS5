@@ -397,12 +397,12 @@ void Launcher::draw_game_options(Canvas &c, float open)
     list.push_opacity(open);
     list.push_transform(1.0f - 0.03f * (1.0f - open) * motion(), 960.0f, 540.0f, 0.0f,
                         (1.0f - open) * 26.0f * motion());
-    glass(c, kDialog, 26.0f, theme::kPanel.with_alpha(0.97f), theme::kPanelEdge.with_alpha(0.66f), 1.6f);
-    text_shrink(c, tr(kCategoryNames[game_options_]), 592.0f, baseline(218.0f, 62.0f, theme::kDisplay),
-                theme::kDisplay, theme::kTitle, 736.0f);
+    glass(c, kDialog, 26.0f, th().panel.with_alpha(0.97f), th().panel_edge.with_alpha(0.66f), 1.6f);
+    text_shrink(c, tr(kCategoryNames[game_options_]), 592.0f, baseline(218.0f, 62.0f, th().size_display),
+                th().size_display, th().title, 736.0f);
     const Game *game = games_.empty() ? nullptr : &games_[static_cast<std::size_t>(library_.selected)];
-    text_fit(c, game != nullptr ? game->name : std::string{}, 592.0f, baseline(291.0f, 32.0f, theme::kSmall),
-             theme::kSmall, Color::rgb(0xcbb9be), 736.0f);
+    text_fit(c, game != nullptr ? game->name : std::string{}, 592.0f, baseline(291.0f, 32.0f, th().size_small),
+             th().size_small, th().note, 736.0f);
 
     const std::vector<Option> rows = options(game_options_, game_settings_, prefs_, services_, {hertz(0), hertz(1)});
     list.push_clip({kWindow.x - 24.0f, kWindow.y - 6.0f, kWindow.w + 48.0f, kWindow.h + 12.0f});
@@ -411,10 +411,10 @@ void Launcher::draw_game_options(Canvas &c, float open)
     for (int row = option_rows_.first_row(); row <= option_rows_.last_row(); ++row)
     {
         list.push_opacity(option_rows_.row_alpha(row, kRowHeight));
-        plate_rest(c, kRowPlate, {592.0f, row_top(row), 736.0f, kRowHeight});
+        plate_rest(c, row_plate(), {592.0f, row_top(row), 736.0f, kRowHeight});
         list.pop_opacity();
     }
-    plate_focus(c, kRowPlate, {592.0f, kRowsTop + option_rows_.cursor() - option_rows_.scroll(), 736.0f, kRowHeight},
+    plate_focus(c, row_plate(), {592.0f, kRowsTop + option_rows_.cursor() - option_rows_.scroll(), 736.0f, kRowHeight},
                 1.0f);
     for (int row = option_rows_.first_row(); row <= option_rows_.last_row(); ++row)
     {
@@ -428,11 +428,11 @@ void Launcher::draw_game_options(Canvas &c, float open)
             option.value >= 0 ? pick(option.values, option.value) : fill(tr("Default ({0})"), {option.usual});
         if (option.locked)
             list.push_opacity(0.38f);
-        const float taken = chooser(c, value, 1296.0f, baseline(top, kRowHeight, theme::kText24),
+        const float taken = chooser(c, value, 1296.0f, baseline(top, kRowHeight, th().size_text),
                                     row == option_rows_.selected ? 1.0f : 0.0f,
-                                    option.value >= 0 ? theme::kLime : theme::kLimePale);
-        text_shrink(c, option.name, 628.0f, baseline(top, kRowHeight, theme::kText24), theme::kText24,
-                    theme::kValue, 664.0f - taken - 28.0f);
+                                    option.value >= 0 ? th().accent : th().accent_pale);
+        text_shrink(c, option.name, 628.0f, baseline(top, kRowHeight, th().size_text), th().size_text,
+                    th().value, 664.0f - taken - 28.0f);
         if (option.locked)
             list.pop_opacity();
         list.pop_opacity();
@@ -445,26 +445,26 @@ void Launcher::draw_game_options(Canvas &c, float open)
     const bool types = game_options_ == category_system && option_rows_.selected == kSeedRow;
     if (!message_.empty())
     {
-        notice_block(c, message_, 592.0f, kHints - 6.0f, theme::kSmall, 26.0f,
-                     message_warning_ ? theme::kWarning : theme::kLimePale, 736.0f, 2, message_warning_);
+        notice_block(c, message_, 592.0f, kHints - 6.0f, th().size_small, 26.0f,
+                     message_warning_ ? th().warning : th().accent_pale, 736.0f, 2, message_warning_);
     }
     else if (opens)
     {
         static constexpr Hint kOpen[] = {
             {Pad::cross, TR("Open")}, {Pad::leftright, TR("Change")}, {Pad::circle, TR("Back")}};
-        draw_hints(c, kOpen, 3, 592.0f, kHints, theme::kCopy, 736.0f);
+        draw_hints(c, kOpen, 3, 592.0f, kHints, th().copy, 736.0f);
     }
     else if (types)
     {
         static constexpr Hint kType[] = {
             {Pad::cross, TR("Edit")}, {Pad::leftright, TR("Change")}, {Pad::circle, TR("Back")}};
-        draw_hints(c, kType, 3, 592.0f, kHints, theme::kCopy, 736.0f);
+        draw_hints(c, kType, 3, 592.0f, kHints, th().copy, 736.0f);
     }
     else
     {
         static constexpr Hint kChange[] = {
             {Pad::updown, TR("Select")}, {Pad::leftright, TR("Change")}, {Pad::circle, TR("Back")}};
-        draw_hints(c, kChange, 3, 592.0f, kHints, theme::kCopy, 736.0f);
+        draw_hints(c, kChange, 3, 592.0f, kHints, th().copy, 736.0f);
     }
     list.pop_transform();
     list.pop_opacity();
@@ -499,7 +499,7 @@ void Launcher::press_mapping(Key key)
         else
         {
             modal_ = modal_shown_ = Modal::controls;
-            option_ = 1;
+            option_ = kControlsMappingRow;
             option_cursor_.snap(dialog_row_top(Modal::controls, option_));
         }
         message_.clear();
@@ -560,13 +560,13 @@ void Launcher::draw_mapping(Canvas &c, float open)
     list.push_opacity(open);
     list.push_transform(1.0f - 0.03f * (1.0f - open) * motion(), 960.0f, 540.0f, 0.0f,
                         (1.0f - open) * 26.0f * motion());
-    glass(c, kDialog, 26.0f, theme::kPanel.with_alpha(0.97f), theme::kPanelEdge.with_alpha(0.66f), 1.6f);
-    text_shrink(c, tr("Button mapping"), 592.0f, baseline(218.0f, 62.0f, theme::kDisplay), theme::kDisplay,
-                theme::kTitle, 736.0f);
+    glass(c, kDialog, 26.0f, th().panel.with_alpha(0.97f), th().panel_edge.with_alpha(0.66f), 1.6f);
+    text_shrink(c, tr("Button mapping"), 592.0f, baseline(218.0f, 62.0f, th().size_display), th().size_display,
+                th().title, 736.0f);
     const Game *game = mapping_for_game_ && !games_.empty() ?
                            &games_[static_cast<std::size_t>(library_.selected)] : nullptr;
     text_fit(c, game != nullptr ? game->name : std::string{tr("For every controller. A game can have its own.")},
-             592.0f, baseline(291.0f, 32.0f, theme::kSmall), theme::kSmall, Color::rgb(0xcbb9be), 736.0f);
+             592.0f, baseline(291.0f, 32.0f, th().size_small), th().size_small, th().note, 736.0f);
 
     const ButtonMapping &mapping = mapping_for_game_ ? game_settings_.mapping : prefs_.mapping;
     list.push_clip({kWindow.x - 24.0f, kWindow.y - 6.0f, kWindow.w + 48.0f, kWindow.h + 12.0f});
@@ -575,10 +575,10 @@ void Launcher::draw_mapping(Canvas &c, float open)
     for (int row = mapping_rows_.first_row(); row <= mapping_rows_.last_row(); ++row)
     {
         list.push_opacity(mapping_rows_.row_alpha(row, kRowHeight));
-        plate_rest(c, kRowPlate, {592.0f, row_top(row), 736.0f, kRowHeight});
+        plate_rest(c, row_plate(), {592.0f, row_top(row), 736.0f, kRowHeight});
         list.pop_opacity();
     }
-    plate_focus(c, kRowPlate, {592.0f, kRowsTop + mapping_rows_.cursor() - mapping_rows_.scroll(), 736.0f, kRowHeight},
+    plate_focus(c, row_plate(), {592.0f, kRowsTop + mapping_rows_.cursor() - mapping_rows_.scroll(), 736.0f, kRowHeight},
                 1.0f);
     for (int row = mapping_rows_.first_row(); row <= mapping_rows_.last_row(); ++row)
     {
@@ -588,11 +588,11 @@ void Launcher::draw_mapping(Canvas &c, float open)
         list.push_opacity(mapping_rows_.row_alpha(row, kRowHeight));
         // The game's button, and the DualSense button that presses it (brighter when moved).
         const float taken = chooser(c, tr(kPadButtonNames[std::clamp(pad, 0, kPadButtons - 1)]), 1296.0f,
-                                    baseline(top, kRowHeight, theme::kText24),
+                                    baseline(top, kRowHeight, th().size_text),
                                     row == mapping_rows_.selected ? 1.0f : 0.0f,
-                                    usual ? theme::kLimePale : theme::kLime);
-        text_shrink(c, tr(kGameButtonNames[row]), 628.0f, baseline(top, kRowHeight, theme::kText24),
-                    theme::kText24, theme::kValue, 664.0f - taken - 28.0f);
+                                    usual ? th().accent_pale : th().accent);
+        text_shrink(c, tr(kGameButtonNames[row]), 628.0f, baseline(top, kRowHeight, th().size_text),
+                    th().size_text, th().value, 664.0f - taken - 28.0f);
         list.pop_opacity();
     }
     list.pop_clip();
@@ -600,8 +600,8 @@ void Launcher::draw_mapping(Canvas &c, float open)
 
     if (!message_.empty())
     {
-        notice_block(c, message_, 592.0f, kHints - 6.0f, theme::kSmall, 26.0f,
-                     message_warning_ ? theme::kWarning : theme::kLimePale, 736.0f, 2, message_warning_);
+        notice_block(c, message_, 592.0f, kHints - 6.0f, th().size_small, 26.0f,
+                     message_warning_ ? th().warning : th().accent_pale, 736.0f, 2, message_warning_);
     }
     else
     {
@@ -609,7 +609,7 @@ void Launcher::draw_mapping(Canvas &c, float open)
                                              {Pad::leftright, TR("Change")},
                                              {Pad::square, TR("Reset")},
                                              {Pad::circle, TR("Back")}};
-        draw_hints(c, kHintsRow, 4, 592.0f, kHints, theme::kCopy, 736.0f);
+        draw_hints(c, kHintsRow, 4, 592.0f, kHints, th().copy, 736.0f);
     }
     list.pop_transform();
     list.pop_opacity();

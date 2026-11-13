@@ -3,9 +3,10 @@
 from pathlib import Path
 import subprocess
 import tempfile
+from eglantine_source import EGLANTINE, source as eglantine_source  # the core, part of this repository
 root = Path(__file__).resolve().parents[1]
 scratch = Path((root / '.local/headless-cache').read_text().strip())
-code = (scratch / 'native-local/headless/block_of_code.cpp').read_text()
+code = eglantine_source('src/dynarmic/src/dynarmic/backend/x64/block_of_code.cpp')
 assert ', EdenJitAllocator())' in code
 source = r'''
 #include "jit-allocator.h"
@@ -149,7 +150,7 @@ int main() {
             assert(mincore(const_cast<unsigned char*>(gone), page, &state)==-1 && errno==ENOMEM);
         }
 #ifdef EDEN_JIT_ALIAS_NATIVE
-        assert(handles.size()==4);
+        assert(handles.size()==4*8); // 4 steps of 16 MiB, each taken as 8 pieces of 2 MiB
         for (int fd : handles) { errno=0; assert(fcntl(fd,F_GETFD)==-1 && errno==EBADF); }
         reserve_ok=false;
 #endif

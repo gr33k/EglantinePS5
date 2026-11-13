@@ -124,13 +124,13 @@ std::string Lower(std::string text) {
     return text;
 }
 
-// A file the console can use: an NSP or XCI with a plain name.
+// A file the console can use: an NSP, XCI or NUP with a plain name.
 bool GameFileName(const std::string& name) {
     if (name.size() < 5 || name.size() > 240) return false;
     for (const unsigned char c : name)
         if (c < 32 || c == 127 || c == '/' || c == '\\') return false;
     const std::string extension = Lower(name.substr(name.size() - 4));
-    return extension == ".nsp" || extension == ".xci";
+    return extension == ".nsp" || extension == ".xci" || extension == ".nup";
 }
 
 // A name as one part of a path: letters, digits, '-' and '_' stay, the rest is %XX.

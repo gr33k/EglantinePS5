@@ -5,20 +5,21 @@ import subprocess
 import tempfile
 root = Path(__file__).resolve().parents[1]
 graphics = (root/'headless/graphics.cpp').read_text()
-draw_hud = graphics.split('    void DrawHud(', 1)[1].split('    unsigned presented_frames', 1)[0]
+draw_hud = graphics.split('    bool DrawHud(', 1)[1].split('    unsigned presented_frames', 1)[0]
 assert 'glReadPixels' not in draw_hud
 assert 'eglSwapBuffers' not in draw_hud
 present_loading = graphics.split('    void PresentLoading()', 1)[1].split('    bool LoadingTick(bool idle)', 1)[0]
 # The loading scene, or plain text when its shader does not build; then one swap.
 assert (present_loading.index('DrawLoading(') < present_loading.index('DrawHud(text, true)')
         < present_loading.index('eglSwapBuffers'))
-draw_loading = graphics.split('    bool DrawLoading(', 1)[1].split('    void DrawHud(', 1)[0]
+draw_loading = graphics.split('    bool DrawLoading(', 1)[1].split('    bool DrawHud(', 1)[0]
 assert 'eglSwapBuffers' not in draw_loading and 'loading_failed = true' in draw_loading
 assert 'vec4(0.025,0.04,0.075,0.5)' in graphics
 assert 'glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)' in graphics
 # As wide as its text, laid out for a picture 1080 rows high and scaled to the surface's.
 assert 'const int text_width = int(std::strlen(text)) * 16;' in draw_hud
-assert 'units(text_width + 24)' in draw_hud
+assert 'line.width = static_cast<uint32_t>(text_width + 24);' in draw_hud
+assert 'PlaceHud(line, ' in draw_hud
 assert 'static_cast<float>(height) / 1080.0f' in draw_hud
 
 with tempfile.TemporaryDirectory() as directory:
@@ -51,9 +52,20 @@ int main() {
     for (int i = 0; i < 5; ++i) assert(!slow.Ready(i));
     assert(slow.Ready(5)); // Slow rendering must not remain hidden forever.
     assert(Eden::HudGlyph(' ') == 0 && Eden::HudGlyph('F') != 0 && Eden::HudGlyph('W') != 0);
+    for (const auto page : {emuhub_switch_menu::Page::choices,
+                            emuhub_switch_menu::Page::confirm_return}) {
+        const auto generation = Eden::SwitchMenu::Publish(page,
+            emuhub_switch_menu::Choice::return_to_emuhub);
+        assert(generation != 0);
+        for (unsigned row = 0; row < Eden::SwitchMenu::kRows; ++row) {
+            const auto line = Eden::SwitchMenu::Line(Eden::SwitchMenu::view.load(), row);
+            assert(line.size() <= 28);
+            for (const char c : line) assert(c == ' ' || Eden::HudGlyph(c) != 0);
+        }
+    }
     auto text = Eden::HudText("FPS 12.3");
-    assert(text[0] == Eden::HudGlyph('F') && text[8] == 0);
-    assert(Eden::HudText("01234567890123456789")[15] == Eden::HudGlyph('5'));
+    assert(Eden::HudTextGlyph(text, 0) == Eden::HudGlyph('F') && Eden::HudTextGlyph(text, 8) == 0);
+    assert(Eden::HudTextGlyph(Eden::HudText("01234567890123456789"), 15) == Eden::HudGlyph('5'));
     assert(std::string_view(Eden::FormatHudText(clock, 100, "OGL").data()) == "OGL F60 S100 W17");
     assert(Eden::HudGlyph('V') != 0 && Eden::HudGlyph('K') != 0);
     auto snapshot = Eden::MakeHudSnapshot(clock, 100);
@@ -77,7 +89,7 @@ int main() {
     assert(Eden::MakeHudSnapshot(clock, 0).glyphs == Eden::HudText("VLK F-- S-- W--"));
     clock.fps = 1000000;
     clock.worst_ms = 1000000;
-    assert(Eden::MakeHudSnapshot(clock, 1000000).width <= 28 * 16 + 24);
+    assert(Eden::MakeHudSnapshot(clock, 1000000).width <= Eden::kHudTextMax * 16 + 24);
     static_assert(sizeof(Eden::HudSnapshot) == 128);
     clock.fps = 60;
     clock.worst_ms = 17;

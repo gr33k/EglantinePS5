@@ -4,16 +4,16 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+from eglantine_source import EGLANTINE, source as eglantine_source  # the core, part of this repository
 
 root = Path(__file__).resolve().parents[1]
 assert not re.search(r'\b(?:__syscall|syscall)\s*\(', (root / 'headless/performance.cpp').read_text()), 'Native titles reject direct syscalls; use imported APIs'
 cache = Path((root / '.local/headless-cache').read_text().strip())
-source = cache / 'source/src'
-original = (source / 'common/thread.cpp').read_text()
-derived = (cache / 'native-local/headless/thread.cpp').read_text()
-assert derived == '#include "' + str(root / 'headless/performance.h') + '"\n' + original.replace(
-    'void SetCurrentThreadName(const char* name) {',
-    'void SetCurrentThreadName(const char* name) {\n    ::Eden::Performance::RegisterWorker(name);')
+source = EGLANTINE / 'src'
+# Every thread that names itself is registered with the worker placement (Eglantine/'s thread.cpp).
+derived = eglantine_source('src/common/thread.cpp')
+assert '#include "headless/performance.h"' in derived
+assert derived.count('void SetCurrentThreadName(const char* name) {\n    ::Eden::Performance::RegisterWorker(name);') == 1
 main = (root / 'headless/main.cpp').read_text()
 assert main.index('Performance::PlatformChecks()') < main.index('Common::Log::Initialize()')
 # Periodic sampling is allowed only in the explicit development profile branch.
@@ -50,6 +50,11 @@ std::uint64_t Faults() noexcept { return 0; }
 int main() {
     using namespace Eden::Performance;
     PlatformChecks();
+    // A Timer counts only while timers are on (development and diagnostics builds, cost runs).
+    Totals untimed;
+    for (unsigned i = 0; i < 1000; ++i) { Timer timer(untimed, 16); }
+    assert(untimed.calls == 0 && untimed.requested_bytes == 0 && untimed.nanoseconds == 0);
+    timers_on = true;
     Totals timed;
     for (unsigned i = 0; i < 1000; ++i) { Timer timer(timed, 16); }
     assert(timed.calls == 1000 && timed.requested_bytes == 16000 && timed.nanoseconds > 0);

@@ -118,6 +118,10 @@ NOTES = {
     "No mods for this game yet. Copy each mod's folder to {0}, next to roms/.":
         "{0} is a folder; roms/ is a folder name (unchanged).",
     "Turn on or off": "Button hint: switch the highlighted mod on or off.",
+    "Theme": "Settings > Accessibility row: the launcher's look (its colours). The themes' names "
+             "(Eglantine, Canopy, Slate) stay as they are.",
+    "Accent color": "Settings > Accessibility row: the theme's highlight colour. The colours' names "
+                    "(Rose, Ocean...) stay as they are.",
     "Create the folder": "Button hint: make the folder a game's mods go in.",
     "Created {0}. Copy each mod's folder into it.": "{0} is a folder.",
     "EglantinePS5 stopped because of an error. A report was saved to {0}.":

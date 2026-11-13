@@ -1,8 +1,9 @@
 from pathlib import Path
 import subprocess,tempfile
+from eglantine_source import EGLANTINE, source as eglantine_source  # the core, part of this repository
 r=Path(__file__).resolve().parents[1]
 c=Path((r/'.local/headless-cache').read_text().strip())
-t=(c/'native-local/headless/nso.cpp').read_text()
+t=eglantine_source('src/core/loader/nso.cpp')
 body=t[t.index('    const size_t module_start'):t.index('    // Apply patches if necessary')]
 zero=t[t.index('    // Initialize BSS and page padding directly'):t.index('    // Load codeset for current process')]
 code=r'''

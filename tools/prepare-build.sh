@@ -22,7 +22,7 @@ scratch=$(cat .local/headless-cache)
 [[ "$(cat "$scratch/owner")" == "$root" ]] || { echo "Build cache $scratch belongs to another checkout" >&2; exit 1; }
 
 eden="$scratch/source"
-# The emulator source is the Eglantine submodule; a tree synced from another commit of it is
+# The emulator source is Eglantine/ in this repository; a tree synced from another state of it is
 # synced again (Eden's package cache, downloads only, is kept).
 bash tools/sync-eden-source.sh "$eden"
 # Optional: seed Eden's package cache from another checkout's (CI reuses a development cache).
@@ -45,7 +45,8 @@ if [[ ! -f $scratch/sdk/.complete ]]; then
     cp -a ../ps5-native-app-boilerplate/.deps/native/ps5-payload-sdk/target "$scratch/sdk/"
     touch "$scratch/sdk/.complete"
 fi
-if [[ ! -f $scratch/ffmpeg-native/install/lib/libavcodec.a ]]; then
+# .with-dav1d: built with the AV1 decoder (an older cache rebuilds once).
+if [[ ! -f $scratch/ffmpeg-native/install/lib/libavcodec.a || ! -f $scratch/ffmpeg-native/install/.with-dav1d ]]; then
     step "FFmpeg for the PS5"
     bash tools/build-headless-ffmpeg.sh
 fi
@@ -76,6 +77,18 @@ if [[ -f $radv_release/lib/libvulkan_radeon.ps5.a ]]; then
         rm -f build/radv-isolated/libvulkan_radeon.ps5.a
     elif ! python3 -B tools/patch-radv-memory-report.py --check "$radv_release/EDEN_MEMORY_REPORT_SHA256"; then
         step "RADV: the per-purpose memory report changed"
+        bash tools/build-radv-dependencies.sh
+        rm -f build/radv-isolated/libvulkan_radeon.ps5.a
+    elif ! python3 -B tools/patch-radv-trim.py --check "$radv_release/EDEN_MEMORY_TRIM_SHA256"; then
+        step "RADV: giving back device memory no resource uses changed"
+        bash tools/build-radv-dependencies.sh
+        rm -f build/radv-isolated/libvulkan_radeon.ps5.a
+    elif ! python3 -B tools/patch-radv-pieces.py --check "$radv_release/EDEN_MEMORY_PIECES_SHA256"; then
+        step "RADV: driver memory from 2 MiB pieces changed"
+        bash tools/build-radv-dependencies.sh
+        rm -f build/radv-isolated/libvulkan_radeon.ps5.a
+    elif ! python3 -B tools/patch-radv-gs-compute.py --check "$radv_release/EDEN_GS_COMPUTE_SHA256"; then
+        step "RADV: geometry-shader compute passes for dropped draws changed"
         bash tools/build-radv-dependencies.sh
         rm -f build/radv-isolated/libvulkan_radeon.ps5.a
     elif ! python3 -B tools/patch-radv-wsi.py --check "$radv_release/EDEN_WSI_SHA256"; then

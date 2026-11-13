@@ -4,10 +4,11 @@
 from pathlib import Path
 import subprocess
 import tempfile
+from eglantine_source import EGLANTINE, source as eglantine_source  # the core, part of this repository
 
 root = Path(__file__).resolve().parents[1]
 cache = Path((root / '.local/headless-cache').read_text().strip())
-adapted = (cache / 'native-local/headless/vfs_real.cpp').read_text()
+adapted = eglantine_source('src/core/file_sys/vfs/vfs_real.cpp')
 upstream = (root / 'Eglantine/src/core/file_sys/vfs/vfs_real.cpp').read_text()
 
 def policy(source):

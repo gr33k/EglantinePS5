@@ -20,7 +20,7 @@ PS5_PORT ?= 2121
 PYTHON := python3 -B
 RELEASE_APP := build/release/PPSA98515
 
-.PHONY: help release package dev prepare deps deps-status update toolchain test install clean distclean
+.PHONY: help release package dev prepare deps deps-status toolchain test install clean distclean
 
 help: ## List the targets and variables
 	@echo 'EglantinePS5 build - make [target] [VARIABLE=value]'
@@ -45,13 +45,8 @@ dev: prepare ## Development build that boots DEV_TITLE: build/dev/PPSA98515
 prepare: deps ## Build cache, Eden source, FFmpeg, packaging tool, driver stub, RADV (what is missing)
 	bash tools/prepare-build.sh
 
-deps: ## Fetch missing dependencies at their pinned revisions (and the Eglantine submodule)
-	git submodule update --init Eglantine
+deps: ## Fetch missing dependencies at their pinned revisions
 	$(PYTHON) tools/deps.py fetch
-	bash tools/apply-eglantine-patches.sh
-
-update: ## Move the Eglantine submodule to the newest commit of its default branch and check the port still applies
-	bash tools/update-eglantine.sh
 
 deps-status: ## Show every dependency, where it lives and whether it matches its pin
 	@$(PYTHON) tools/deps.py status

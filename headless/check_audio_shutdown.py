@@ -18,9 +18,10 @@ def check(text):
         'The cheat engine outlives the services'
 
 if __name__ == '__main__':
-    fixed, original = (Path(name).read_text() for name in sys.argv[1:])
+    # CORE_CPP: Eglantine/'s src/core/core.cpp (the build's copy of it).
+    fixed = Path(sys.argv[1]).read_text()
     check(fixed)
-    for bad in (original, fixed.replace('GameSettings::LoadOverrides(params.program_id,',
+    for bad in (fixed.replace('GameSettings::LoadOverrides(params.program_id,',
             'GameSettings::LoadOverrides(program_id,'), fixed.replace('if (audio_core) audio_core->Shutdown();', '').replace(
             'services.reset();', 'services.reset();\nif (audio_core) audio_core->Shutdown();'),
             fixed.replace('        cheat_engine.reset();\n', '', 1)):

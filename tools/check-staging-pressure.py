@@ -3,10 +3,11 @@
 from pathlib import Path
 import subprocess
 import tempfile
+from eglantine_source import EGLANTINE, source as eglantine_source  # the core, part of this repository
 
 root = Path(__file__).resolve().parents[1]
 cache = Path((root / '.local/headless-cache').read_text().strip())
-source = (cache / 'native-local/headless/vulkan_staging_buffer_pool.cpp').read_text()
+source = eglantine_source('src/video_core/renderer_vulkan/vk_staging_buffer_pool.cpp')
 start = source.index('void StagingBufferPool::ReleaseCompleted() {')
 end = source.index('\nvoid StagingBufferPool::TickFrame()', start)
 body = source[start:end]

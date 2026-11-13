@@ -77,6 +77,8 @@ int main() {
     const Eden::Preferences new_preferences = Eden::LoadPreferences(settings);
     assert(new_preferences.volume == 55 && new_preferences.mute && new_preferences.menu_volume == old_preferences.menu_volume);
     assert(new_preferences.backend == Eden::GraphicsBackend::OpenGL && !new_preferences.vibration);
+    // A file from before the vibration strength existed plays at full strength.
+    assert(old_preferences.vibration_strength == 100 && new_preferences.vibration_strength == 100);
     assert(new_preferences.resolution == old_preferences.resolution &&
            new_preferences.upscaling_filter == old_preferences.upscaling_filter && !new_preferences.hud);
     assert(new_preferences.mapping == old_preferences.mapping && new_preferences.mapping != Eden::kDefaultMapping);

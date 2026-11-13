@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise actual Dynarmic monitor operations with the PS5 lock derivative."""
+"""Exercise Dynarmic's monitor operations with the PS5 lock (Eglantine/)."""
 from pathlib import Path
 import re
 import subprocess
@@ -7,11 +7,16 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 cache = Path((root / '.local/headless-cache').read_text().strip())
-dynarmic = cache / 'source/src/dynarmic/src'
-monitor = (dynarmic / 'dynarmic/backend/x64/exclusive_monitor.cpp').read_text()
+from eglantine_source import EGLANTINE, source as eglantine_source  # the core, part of this repository
+dynarmic = EGLANTINE / 'src/dynarmic/src'
+monitor = eglantine_source('src/dynarmic/src/dynarmic/backend/x64/exclusive_monitor.cpp')
 # This implementation includes, but does not use, the application logger/asserts.
 monitor = monitor.replace('#include "common/assert.h"', '')
-lock = (root / 'headless/spin-lock.inc').read_text()
+# The PS5 lock (Eglantine/'s spin_lock_x64.cpp): from its ABI note to the end of Unlock.
+spin = eglantine_source('src/dynarmic/src/dynarmic/common/spin_lock_x64.cpp')
+lock_start = spin.index('// PS5 x64: retain the storage ABI')
+unlock = spin.index('void SpinLock::Unlock() noexcept {', lock_start)
+lock = spin[lock_start:spin.index('\n}\n', unlock) + 3]
 source = r'''
 #include <cassert>
 #include <thread>

@@ -5,6 +5,8 @@
 #include <cassert>
 #include <fstream>
 #include <filesystem>
+#include <initializer_list>
+#include <utility>
 #include <unistd.h>
 
 static std::string Read(const std::string& path) {
@@ -52,6 +54,41 @@ int main() {
     assert(!Eden::SavePreferences({true, 101, false, false}, file));
     assert(Eden::LoadPreferences(file).volume == 40);
     assert(Read(file).find("\"renderer\": \"opengl\"") != std::string::npos);
+
+    // The FPS overlay's look: what it showed before there was a choice, with the free memory, at
+    // 1x in the top left corner; saved by key, with values out of range refused.
+    assert(saved.hud_fields == int(Eden::kHudFieldDefault) && saved.hud_size == 0 && saved.hud_corner == 0);
+    {
+        auto look = saved;
+        look.hud_fields = int(Eden::kHudFieldFps | Eden::kHudFieldCpu | Eden::kHudFieldGpu);
+        look.hud_size = 2;
+        look.hud_corner = 3;
+        assert(Eden::SavePreferences(look, file));
+        const auto back = Eden::LoadPreferences(file);
+        assert(back.hud_fields == look.hud_fields && back.hud_size == 2 && back.hud_corner == 3);
+        assert(Read(file).find("\"fps_overlay_corner\": \"bottom_right\"") != std::string::npos);
+        assert(Read(file).find("\"fps_overlay_size\": \"large\"") != std::string::npos);
+        using Change = void (*)(Eden::Preferences&);
+        for (const Change bad : {Change{[](Eden::Preferences& p) { p.hud_fields = 0x100; }},
+                                 Change{[](Eden::Preferences& p) { p.hud_fields = -1; }},
+                                 Change{[](Eden::Preferences& p) { p.hud_size = 3; }},
+                                 Change{[](Eden::Preferences& p) { p.hud_corner = 4; }}}) {
+            auto wrong = look;
+            bad(wrong);
+            assert(!Eden::SavePreferences(wrong, file));
+        }
+        // A file edited by hand: unknown values read as the defaults. No fields at all is allowed.
+        auto document = Eden::Settings::Load(file);
+        document["video"]["fps_overlay_fields"] = 4096;
+        document["video"]["fps_overlay_size"] = "huge";
+        document["video"]["fps_overlay_corner"] = 2;
+        assert(Eden::Settings::Write(document, file));
+        const auto edited = Eden::LoadPreferences(file);
+        assert(edited.hud_fields == int(Eden::kHudFieldDefault) && edited.hud_size == 0 && edited.hud_corner == 0);
+        look.hud_fields = 0;
+        assert(Eden::SavePreferences(look, file) && Eden::LoadPreferences(file).hud_fields == 0);
+        assert(Eden::SavePreferences(saved, file));
+    }
 
     Eden::Multiplayer::Connection room{"127.0.0.1", 24872, "PlayerOne", "saved-room-password"};
     assert(Eden::SaveRoomConnection(room, file));
@@ -197,6 +234,29 @@ int main() {
     assert(Eden::SavePreferences(controls, file));
     assert(!Eden::LoadPreferences(file).vibration);
     assert(Read(file).find("\"vibration\": false") != std::string::npos);
+    // Its strength: 100% unless lowered, in steps of 25%. A value between the steps reads as the
+    // step below it, one out of range as the nearest end, one that is no number as the default
+    // (100%); saving refuses anything but a step.
+    assert(controls.vibration_strength == 100);
+    controls.vibration_strength = 75;
+    assert(Eden::SavePreferences(controls, file));
+    assert(Eden::LoadPreferences(file).vibration_strength == 75);
+    assert(Read(file).find("\"vibration_strength\": 75") != std::string::npos);
+    for (const int refused : {0, 10, 60, 125}) {
+        auto wrong = controls;
+        wrong.vibration_strength = refused;
+        assert(!Eden::SavePreferences(wrong, file));
+    }
+    assert(Eden::LoadPreferences(file).vibration_strength == 75);
+    for (const auto& [stored, read] : std::initializer_list<std::pair<const char*, int>>{
+             {"60", 50}, {"10", 25}, {"400", 100}, {"-5", 25}, {"\"loud\"", 100}}) {
+        auto document = Eden::Settings::LoadWhole(file);
+        document["controls"]["vibration_strength"] = Eden::Settings::Json::parse(stored);
+        { std::ofstream(file) << document.dump(); }
+        assert(Eden::LoadPreferences(file).vibration_strength == read);
+    }
+    controls.vibration_strength = 100;
+    assert(Eden::SavePreferences(controls, file));
 
     // The launcher's look (Settings > Accessibility): all off unless turned on.
     auto look = Eden::LoadPreferences(file);
@@ -206,6 +266,26 @@ int main() {
     look = Eden::LoadPreferences(file);
     assert(look.large_text && !look.high_contrast && look.reduce_motion && !look.vibration);
     assert(Read(file).find("\"reduce_motion\": true") != std::string::npos);
+
+    // The launcher's theme (Settings > Accessibility): Eglantine with its own accent unless
+    // another is chosen; an id that is not one is not written, and not read.
+    auto theme = Eden::LoadPreferences(file);
+    assert(theme.theme == "eglantine" && theme.accent.empty());
+    theme.theme = "slate";
+    theme.accent = "ice";
+    assert(Eden::SavePreferences(theme, file));
+    theme = Eden::LoadPreferences(file);
+    assert(theme.theme == "slate" && theme.accent == "ice" && theme.large_text);
+    assert(Read(file).find("\"theme\": \"slate\"") != std::string::npos);
+    auto odd_theme = theme;
+    odd_theme.theme = "../Slate";
+    assert(!Eden::SavePreferences(odd_theme, file));
+    odd_theme.theme.clear();
+    assert(!Eden::SavePreferences(odd_theme, file));
+    assert(Eden::LoadPreferences(file).theme == "slate");
+    theme.theme = Eden::kDefaultLauncherTheme;
+    theme.accent.clear();
+    assert(Eden::SavePreferences(theme, file));
 
     // Renderer, resolution and filter per title (Library > Game settings); -1 = Settings default.
     auto game = Eden::LoadGameSettings(racer, file);

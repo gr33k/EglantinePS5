@@ -4,11 +4,12 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+from eglantine_source import EGLANTINE, source as eglantine_source  # the core, part of this repository
 
 root = Path(__file__).resolve().parents[1]
 cache = Path((root / '.local/headless-cache').read_text().strip())
-source = (cache / 'native-local/headless/block_of_code.cpp').read_text()
-header = (cache / 'native-local/headless/include/dynarmic/backend/x64/block_of_code.h').read_text()
+source = eglantine_source('src/dynarmic/src/dynarmic/backend/x64/block_of_code.cpp')
+header = eglantine_source('src/dynarmic/src/dynarmic/backend/x64/block_of_code.h')
 assert 'size_t protection_end = 0;' in header and 'size_t executable_end = 0;' in header
 assert 'align(sysconf(_SC_PAGESIZE));' in source
 assert 'align(sysconf(_SC_PAGESIZE));\n    prelude_complete = true;' in source
@@ -19,7 +20,7 @@ for bits in (32, 64):
     emitter = (backend / f'a{bits}_emit_x64.cpp').read_text()
     sizes = re.findall(r'EnsurePatchLocationSize\(patch_location, (\d+)\)', emitter)
     assert len(sizes) == 4 and max(map(int, sizes)) <= 23
-    generated = (cache / f'native-local/headless/a{bits}_emit_x64.cpp').read_text()
+    generated = eglantine_source(f'src/dynarmic/src/dynarmic/backend/x64/a{bits}_emit_x64.cpp')
     unpatch = generated[generated.index(f'void A{bits}EmitX64::Unpatch('):]
     assert 'code.DisableWriting()' not in unpatch and 'code.EnableWriting()' not in unpatch
     assert '(*fast_dispatch_table_lookup)(location.Value()) = {};' in unpatch

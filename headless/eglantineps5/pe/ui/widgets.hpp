@@ -104,11 +104,12 @@ struct Plate
     Color focus_right;
     Color focus_edge;
 };
-extern const Plate kRowPlate;     // settings and dialog rows
-extern const Plate kListPlate;    // library, folder and language rows
-extern const Plate kButtonPlate;  // home hero buttons
-extern const Plate kTilePlate;    // recently played tiles
-extern const Plate kNavPlate;     // header navigation
+// Each in the theme in use (theme.hpp), so they are made where they are drawn.
+Plate row_plate();    // settings and dialog rows
+Plate list_plate();   // library, folder and language rows
+Plate button_plate(); // home hero buttons
+Plate tile_plate();   // recently played tiles
+Plate nav_plate();    // header navigation
 // The surface at rest, with `focus` (0..1) of the highlight blended over it.
 void plate(Canvas &c, const Plate &style, const Rect &r, float focus);
 // The surface at rest only (lists draw one gliding highlight over their rows).

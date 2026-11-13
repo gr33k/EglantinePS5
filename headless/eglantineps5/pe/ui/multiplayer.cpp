@@ -9,9 +9,9 @@ using audio::Cue;
 static constexpr int kVisibleRoomMembers = 8;
 
 static void draw_room_error(Canvas& c, const std::string& error) {
-    glass(c, {542, 704, 836, 152}, 14, theme::kRow, theme::kWarning, 1.6f);
-    text(c, tr("Connection problem"), 562, 736, theme::kSmall, theme::kWarning);
-    text_block(c, error, 562, 768, theme::kSmall, 27, theme::kTitle, 796, 3);
+    glass(c, {542, 704, 836, 152}, 14, th().row, th().warning, 1.6f);
+    text(c, tr("Connection problem"), 562, 736, th().size_small, th().warning);
+    text_block(c, error, 562, 768, th().size_small, 27, th().title, 796, 3);
 }
 
 void Launcher::open_multiplayer() {
@@ -229,27 +229,27 @@ void Launcher::draw_public_rooms(Canvas& c) {
     const bool loading = room_directory_request_.valid() && !room_directory_stop_.load();
     text_fit(c, loading ? tr("Loading public rooms...") :
         fill(tr("{0} public rooms"), {std::to_string(room_directory_.rooms.size())}),
-        542, 300, theme::kSmall, theme::kCopy, 836);
+        542, 300, th().size_small, th().copy, 836);
     const Rect nick{542, 322, 836, 64};
-    if (room_row_ == 0) plate_focus(c, kRowPlate, nick, 1);
-    else plate_rest(c, kRowPlate, nick);
+    if (room_row_ == 0) plate_focus(c, row_plate(), nick, 1);
+    else plate_rest(c, row_plate(), nick);
     text_fit(c, fill(tr("Nickname: {0}"), {room_connection_.nickname}), 562, 363,
-             theme::kSmall, theme::kTitle, 796);
+             th().size_small, th().title, 796);
     const int visible = room_status_.error.empty() ? 6 : 4;
     const int first = std::max(0, room_row_ - visible);
     for (int i = 0; i < visible && first + i < static_cast<int>(room_directory_.rooms.size()); ++i) {
         const auto& room = room_directory_.rooms[first + i];
         const float top = 400.0f + i * 64.0f;
         const Rect row{542, top, 836, 60};
-        if (room_row_ == first + i + 1) plate_focus(c, kRowPlate, row, 1);
-        else plate_rest(c, kRowPlate, row);
-        text_fit(c, room.name, 560, top + 25, theme::kSmall, theme::kTitle, 580);
+        if (room_row_ == first + i + 1) plate_focus(c, row_plate(), row, 1);
+        else plate_rest(c, row_plate(), row);
+        text_fit(c, room.name, 560, top + 25, th().size_small, th().title, 580);
         const auto count = std::to_string(room.players) + " / " + std::to_string(room.capacity);
-        text_fit(c, count, 1170, top + 25, theme::kSmall, theme::kCopy, 190);
+        text_fit(c, count, 1170, top + 25, th().size_small, th().copy, 190);
         std::string detail = room.game;
         if (room.password) { detail += "  |  "; detail += tr("Password"); }
         if (!room.compatible) { detail += "  |  "; detail += tr("Incompatible"); }
-        text_fit(c, detail, 560, top + 49, theme::kSmall, theme::kCopy, 796);
+        text_fit(c, detail, 560, top + 49, th().size_small, th().copy, 796);
     }
     std::string notice;
     if (!message_.empty() && message_age_ < 6) notice = message_;
@@ -261,24 +261,24 @@ void Launcher::draw_public_rooms(Canvas& c) {
     else if (room_row_ > 0) notice = fill(tr("Room {0} of {1}"),
         {std::to_string(room_row_), std::to_string(room_directory_.rooms.size())});
     if (!room_status_.error.empty()) {
-        text_fit(c, notice, 542, 682, theme::kSmall, theme::kCopy, 836);
+        text_fit(c, notice, 542, 682, th().size_small, th().copy, 836);
         draw_room_error(c, room_status_.error);
     }
-    else text_block(c, notice, 542, 814, theme::kSmall, 26, theme::kCopy, 836, 2);
+    else text_block(c, notice, 542, 814, th().size_small, 26, th().copy, 836, 2);
     const Hint hints[]{{Pad::cross, TR("Select")}, {Pad::leftright, TR("Page")}, {Pad::triangle, TR("Refresh")},
                        {Pad::circle, TR("Back")}};
-    draw_hints(c, hints, 4, 542, 890, theme::kCopy, 836);
+    draw_hints(c, hints, 4, 542, 890, th().copy, 836);
 }
 
 void Launcher::draw_multiplayer(Canvas& c, float open) {
     c.list.push_opacity(open);
-    glass(c, {500, 150, 920, 780}, 26, theme::kPanel.with_alpha(0.97f), theme::kPanelEdge, 1.6f);
+    glass(c, {500, 150, 920, 780}, 26, th().panel.with_alpha(0.97f), th().panel_edge, 1.6f);
     text(c, tr(room_page_ == RoomPage::choice ? TR("Multiplayer") :
                room_page_ == RoomPage::public_rooms ? TR("Public rooms") : TR("Private room")),
-         542, 216, theme::kDisplay, theme::kTitle);
+         542, 216, th().size_display, th().title);
     const char* states[]{TR("Offline"), TR("Connecting..."), TR("Connected"), TR("Leaving..."), TR("Connection failed")};
     const auto state = states[static_cast<int>(room_status_.phase)];
-    text_fit(c, tr(state), 542, 264, theme::kSmall, theme::kCopy, 836);
+    text_fit(c, tr(state), 542, 264, th().size_small, th().copy, 836);
     if (room_page_ == RoomPage::choice) {
         const char* labels[]{TR("Public rooms"), TR("Private room")};
         const char* descriptions[]{TR("Browse the public directory and choose a room."),
@@ -286,16 +286,16 @@ void Launcher::draw_multiplayer(Canvas& c, float open) {
         for (int i = 0; i < 2; ++i) {
             const float top = 350.0f + i * 140.0f;
             const Rect row{542, top, 836, 120};
-            if (room_row_ == i) plate_focus(c, kRowPlate, row, 1);
-            else plate_rest(c, kRowPlate, row);
-            text(c, tr(labels[i]), 568, top + 42, theme::kSmall, theme::kTitle);
-            text_fit(c, tr(descriptions[i]), 568, top + 86, theme::kSmall, theme::kCopy, 784);
+            if (room_row_ == i) plate_focus(c, row_plate(), row, 1);
+            else plate_rest(c, row_plate(), row);
+            text(c, tr(labels[i]), 568, top + 42, th().size_small, th().title);
+            text_fit(c, tr(descriptions[i]), 568, top + 86, th().size_small, th().copy, 784);
         }
         if (!room_status_.error.empty()) draw_room_error(c, room_status_.error);
         else text_block(c, tr("Join a room before launching a game, then choose Local Wireless in the game."),
-                   542, 700, theme::kSmall, 28, theme::kCopy, 836, 3);
+                   542, 700, th().size_small, 28, th().copy, 836, 3);
         const Hint hints[]{{Pad::cross, TR("Select")}, {Pad::square, TR("Go offline")}, {Pad::circle, TR("Back")}};
-        draw_hints(c, hints, 3, 542, 878, theme::kCopy, 836);
+        draw_hints(c, hints, 3, 542, 878, th().copy, 836);
         c.list.pop_opacity();
         return;
     }
@@ -307,22 +307,22 @@ void Launcher::draw_multiplayer(Canvas& c, float open) {
     }
     const std::string notice = !message_.empty() && message_age_ < 6 ? message_ :
         tr("Join a room before launching a game, then choose Local Wireless in the game.");
-    text_block(c, notice, 542, 303, theme::kSmall, 28, theme::kCopy, 836, 2);
+    text_block(c, notice, 542, 303, th().size_small, 28, th().copy, 836, 2);
     if (room_status_.phase == Phase::Connected) {
-        text_fit(c, room_status_.room, 542, 380, theme::kSmall, theme::kTitle, 836);
+        text_fit(c, room_status_.room, 542, 380, th().size_small, th().title, 836);
         for (int row = 0; row < kVisibleRoomMembers &&
              room_row_ + row < static_cast<int>(room_status_.members.size()); ++row)
             text_fit(c, room_status_.members[room_row_ + row], 542, 430.0f + 44.0f * row,
-                     theme::kSmall, theme::kCopy, 836);
+                     th().size_small, th().copy, 836);
         if (room_status_.members.size() > kVisibleRoomMembers)
             text_fit(c, std::to_string(room_row_ + 1) + " - " +
                 std::to_string(std::min(room_row_ + kVisibleRoomMembers,
                                        static_cast<int>(room_status_.members.size()))) +
                 " / " + std::to_string(room_status_.members.size()),
-                542, 808, theme::kSmall, theme::kCopy, 836);
+                542, 808, th().size_small, th().copy, 836);
         const Hint hints[]{{Pad::updown, TR("Browse")}, {Pad::cross, TR("Leave room")},
                            {Pad::circle, TR("Back")}};
-        draw_hints(c, hints, 3, 542, 878, theme::kCopy, 836);
+        draw_hints(c, hints, 3, 542, 878, th().copy, 836);
         c.list.pop_opacity();
         return;
     }
@@ -334,14 +334,14 @@ void Launcher::draw_multiplayer(Canvas& c, float open) {
     for (int row = 0; row < 5; ++row) {
         const float top = 340.0f + 70.0f * row;
         const Rect rect{542, top, 836, 64};
-        if (row == room_row_) plate_focus(c, kRowPlate, rect, 1);
-        else plate_rest(c, kRowPlate, rect);
-        text_fit(c, tr(labels[row]), 562, top + 28, theme::kSmall, theme::kTitle, 796);
-        text_fit(c, values[row], 562, top + 55, theme::kSmall, theme::kCopy, 796);
+        if (row == room_row_) plate_focus(c, row_plate(), rect, 1);
+        else plate_rest(c, row_plate(), rect);
+        text_fit(c, tr(labels[row]), 562, top + 28, th().size_small, th().title, 796);
+        text_fit(c, values[row], 562, top + 55, th().size_small, th().copy, 796);
     }
     if (!room_status_.error.empty()) draw_room_error(c, room_status_.error);
     const Hint hints[]{{Pad::cross, TR("Select")}, {Pad::square, TR("Go offline")}, {Pad::circle, TR("Back")}};
-    draw_hints(c, hints, 3, 542, 878, theme::kCopy, 836);
+    draw_hints(c, hints, 3, 542, 878, th().copy, 836);
     c.list.pop_opacity();
 }
 } // namespace pe::ui

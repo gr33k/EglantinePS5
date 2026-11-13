@@ -168,7 +168,31 @@ struct ResidentResult
     bool allow_helper;
 };
 
-ResidentResult try_resident(pid_t pid) noexcept
+bool publish_emuhub_request(pid_t pid) noexcept
+{
+    std::array<char, 80> temporary{};
+    std::array<char, 64> body{};
+    const int size = std::snprintf(body.data(), body.size(), "{\"PID\":\"%ld\"}\n", static_cast<long>(pid));
+    const int path_size = std::snprintf(temporary.data(), temporary.size(),
+        "/download0/.emuhub_jailbreak.%ld", static_cast<long>(pid));
+    if (size <= 0 || static_cast<std::size_t>(size) >= body.size() ||
+        path_size <= 0 || static_cast<std::size_t>(path_size) >= temporary.size()) return false;
+    (void)unlink(temporary.data());
+    File output{open(temporary.data(), O_WRONLY | O_CREAT | O_EXCL, 0644)};
+    if (output.get() < 0 || !write_all(output.get(), body.data(), static_cast<std::size_t>(size))) {
+        (void)unlink(temporary.data());
+        return false;
+    }
+    const int fd = output.release();
+    if (close(fd) != 0 || rename(temporary.data(), "/download0/emuhub_jailbreak") != 0) {
+        (void)unlink(temporary.data());
+        return false;
+    }
+    return true;
+}
+
+
+ResidentResult try_resident(pid_t pid, bool embedded) noexcept
 {
     using elevation::Status;
     File result{open(result_path, O_WRONLY | O_CREAT | O_TRUNC, 0644)};
@@ -177,8 +201,8 @@ ResidentResult try_resident(pid_t pid) noexcept
     (void)fchmod(result.get(), 0644);
     if (seteuid(geteuid()) != 0)
         return {Status::prepare_failed, false};
-    if (!publish_request(pid))
-        return {Status::transport_error, true};
+    if (!(embedded ? publish_emuhub_request(pid) : publish_request(pid)))
+        return {Status::transport_error, !embedded};
 
     int open_error = 0;
     bool proof_failed = false;
@@ -194,7 +218,7 @@ ResidentResult try_resident(pid_t pid) noexcept
     }
 
     errno = 0;
-    if (unlink(request_path) != 0)
+    if (unlink(embedded ? "/download0/emuhub_jailbreak" : request_path) != 0)
     {
         // A missing marker means a resident service claimed it. Never start a
         // second helper for that launch; give the claimed request more time.
@@ -330,11 +354,15 @@ elevation::Status elevation::request(Capability capability, const char *helper_p
     if (open_error == 0)
         return Status::apply_failed;
 
-    const ResidentResult resident = try_resident(pid);
+    const ResidentResult resident = try_resident(pid, helper_path == nullptr);
     if (!resident.allow_helper)
     {
         selected_path = "resident";
         return resident.status;
+    }
+    if (helper_path == nullptr) {
+        selected_path = "emuhub-helper-unavailable";
+        return Status::unavailable; // Never start a second title-bound Lapy helper.
     }
     selected_path = "helper";
     const Status helper = run_helper(helper_path, message);

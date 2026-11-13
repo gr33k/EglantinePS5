@@ -174,6 +174,14 @@ msgstr "Bikubikus"
 msgid "Bilinear"
 msgstr "Bilineáris"
 
+#: pe/ui/settings.cpp
+msgid "Bottom left"
+msgstr "Bal alsó"
+
+#: pe/ui/settings.cpp
+msgid "Bottom right"
+msgstr "Jobb alsó"
+
 #. Button hint: move through the list.
 #: pe/ui/browse.cpp, pe/ui/multiplayer.cpp
 msgid "Browse"
@@ -746,6 +754,10 @@ msgstr "Képkockagenerálás célértéke"
 msgid "Frame gen type"
 msgstr "Képkockagenerálás típusa"
 
+#: pe/ui/settings.cpp
+msgid "Skip game anti-aliasing"
+msgstr "A játék élsimításának kihagyása"
+
 #: pe/ui/game_options.cpp, pe/ui/settings.cpp
 msgid "Frame generation"
 msgstr "Képkockagenerálás"
@@ -987,6 +999,10 @@ msgid "LANGUAGES"
 msgstr "NYELVEK"
 
 #: pe/ui/settings.cpp
+msgid "Large"
+msgstr "Nagy"
+
+#: pe/ui/settings.cpp
 msgid "LARGER TEXT"
 msgstr "NAGYOBB SZÖVEG"
 
@@ -1069,6 +1085,10 @@ msgstr "Tedd a sajátoddá."
 #: pe/ui/settings.cpp
 msgid "Make the menu easier to see and follow."
 msgstr "Legyen a menü könnyebben látható és követhető."
+
+#: pe/ui/settings.cpp
+msgid "Medium"
+msgstr "Közepes"
 
 #: pe/ui/browse.cpp
 msgid "Menu sound effects made with ElevenLabs."
@@ -1306,6 +1326,14 @@ msgstr "KIMENETI FELBONTÁS"
 #: pe/ui/settings.cpp
 msgid "Output resolution"
 msgstr "Kimeneti felbontás"
+
+#: pe/ui/settings.cpp
+msgid "Overlay corner"
+msgstr "A kijelző sarka"
+
+#: pe/ui/settings.cpp
+msgid "Overlay size"
+msgstr "A kijelző mérete"
 
 #. Button hint: jump a page of the list (L1 / R1).
 #: pe/ui/browse.cpp, pe/ui/multiplayer.cpp, pe/ui/update.cpp
@@ -1553,6 +1581,10 @@ msgstr "KÉPFRISSÍTÉS"
 #: pe/ui/browse.cpp, pe/ui/settings.cpp
 msgid "REGION"
 msgstr "RÉGIÓ"
+
+#: pe/ui/settings.cpp
+msgid "Regular"
+msgstr "Normál"
 
 #: pe/ui/profiles.cpp
 msgid "Remove"
@@ -2023,6 +2055,14 @@ msgstr "Ez a szoba más protokollverziót használ."
 #: eden_services.cpp
 msgid "To import, copy a Ryujinx folder to ryujinx/ or a save to save-import/{0}/, next to roms/."
 msgstr "Az importáláshoz másolj egy Ryujinx-mappát a ryujinx/ vagy egy mentést a save-import/{0}/ mappába, a roms/ mellé."
+
+#: pe/ui/settings.cpp
+msgid "Top left"
+msgstr "Bal felső"
+
+#: pe/ui/settings.cpp
+msgid "Top right"
+msgstr "Jobb felső"
 
 #. The DualSense controller's touch pad, pressed as a button. Use the name players know.
 #: pe/ui/game_options.cpp, pe/ui/settings.cpp
