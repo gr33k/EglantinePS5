@@ -74,6 +74,39 @@ public:
         return std::shared_ptr<HeldNupFd>(new HeldNupFd(fd, std::string(path), st));
     }
 
+    // Bound the untrusted TOC before the core allocates it. This checks only
+    // NUP structure, not every game byte; member hashes are checked on read.
+    bool ValidateContainer(std::string* error) const {
+        const auto fail = [&](const char* why) {
+            if (error) *error = why;
+            return false;
+        };
+        std::array<std::uint8_t, 0x80> super{};
+        if (Read(super.data(), super.size(), 0) != super.size() ||
+            std::memcmp(super.data(), "NUP\x01", 4) != 0 ||
+            (std::uint16_t(super[4]) | (std::uint16_t(super[5]) << 8)) < 0x80 ||
+            ReadLe64(super.data() + 0x40) != Size()) return fail("NUP superblock");
+        const auto toc_offset = ReadLe64(super.data() + 0x08);
+        const auto toc_size = ReadLe64(super.data() + 0x10);
+        const auto blob_offset = ReadLe64(super.data() + 0x38);
+        if (toc_offset < super.size() || toc_size < 0x30 ||
+            toc_size > 64ull * 1024 * 1024 ||
+            blob_offset > Size() || toc_offset > blob_offset ||
+            toc_size > blob_offset - toc_offset ||
+            blob_offset % 0x10 != 0) return fail("NUP TOC bounds");
+        std::array<std::uint8_t, 32> expected{};
+        std::memcpy(expected.data(), super.data() + 0x18, expected.size());
+        std::array<std::uint8_t, 32> actual{};
+        if (!DigestRange(toc_offset, toc_size, actual) || actual != expected)
+            return fail("NUP TOC digest");
+        struct stat after{};
+        if (::fstat(fd_, &after) != 0 || after.st_dev != initial_.st_dev ||
+            after.st_ino != initial_.st_ino || after.st_size != initial_.st_size ||
+            after.st_mtime != initial_.st_mtime || after.st_ctime != initial_.st_ctime)
+            return fail("source changed");
+        return true;
+    }
+
     bool Verify(const ExpectedSource& expected, std::string* error) const {
         return VerifyForRoot(expected, RootForVolume(expected.volume_id), error);
     }

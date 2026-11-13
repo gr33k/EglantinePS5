@@ -354,7 +354,7 @@ int main(int argc, char** argv) {
                         provider_rom, root, 64ull * 1024 * 1024 * 1024, &bind_error);
                     break;
                 }
-                if (!held_nup) {
+                if (!held_nup || !held_nup->ValidateContainer(&bind_error)) {
                     Eden::BootTrace::Line("direct NUP open failed: %s", bind_error.c_str());
                     return 2;
                 }
