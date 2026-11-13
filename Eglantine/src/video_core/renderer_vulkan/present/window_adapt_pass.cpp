@@ -6,6 +6,7 @@
 
 #include "core/frontend/framebuffer_layout.h"
 #include "hud.h"
+#include "switch_menu_view.h"
 #include "vulkan_hud_shaders.h"
 #include "video_core/framebuffer_config.h"
 #include "video_core/host_shaders/vulkan_present_vert_spv.h"
@@ -72,7 +73,12 @@ void WindowAdaptPass::Draw(const Device& device, RasterizerVulkan& rasterizer, S
     }
 
     const auto hud = draw_hud ? Eden::GetVulkanHud() : Eden::HudSnapshot{};
-    if (hud.width && !hud_pipeline) {
+    const auto menu_state = Eden::SwitchMenu::view.load(std::memory_order_acquire);
+    const auto menu_generation =
+        static_cast<Eden::SwitchMenu::Page>(menu_state & 0xffu) == Eden::SwitchMenu::Page::closed
+            ? 0u : static_cast<std::uint32_t>(menu_state >> 32);
+    const auto menu_ticket = Eden::SwitchMenu::TicketFor(dst, menu_generation);
+    if ((hud.width || menu_generation) && !hud_pipeline) {
         const VkPushConstantRange range{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(hud)};
         hud_layout = device.GetLogical().CreatePipelineLayout(VkPipelineLayoutCreateInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -148,6 +154,36 @@ void WindowAdaptPass::Draw(const Device& device, RasterizerVulkan& rasterizer, S
             cmdbuf.Draw(4, 1, 0, 0);
         }
 
+        // The EmuHub menu is drawn after the guest and independently of the FPS HUD.
+        // Confirm visibility only for four complete rows in this exact frame.
+        if (menu_generation && hud_graphics_pipeline != VK_NULL_HANDLE &&
+            Eden::SwitchMenu::FitsVulkanMenu(render_area.width, render_area.height, true)) {
+            const auto units = [height = render_area.height](uint32_t value) {
+                return value * height / 1080u;
+            };
+            unsigned rows_drawn = 0;
+            for (unsigned row = 0; row < Eden::SwitchMenu::kRows; ++row) {
+                auto line = Eden::GetVulkanMenuLine(menu_state, row);
+                const auto x = units(line.x), y = units(line.y);
+                const auto w = units(Eden::SwitchMenu::kWidth);
+                const auto h = units(Eden::SwitchMenu::kHeight);
+                if (!w || !h || x + w > render_area.width || y + h > render_area.height) break;
+                const VkRect2D scissor{{static_cast<int32_t>(x), static_cast<int32_t>(y)}, {w, h}};
+                const VkViewport viewport{static_cast<float>(x), static_cast<float>(y),
+                    static_cast<float>(w), static_cast<float>(h), 0, 1};
+                cmdbuf.SetViewport(0, viewport);
+                cmdbuf.SetScissor(0, scissor);
+                cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, hud_graphics_pipeline);
+                line.x = x;
+                line.y = y;
+                line.width = render_area.height;
+                cmdbuf.PushConstants(hud_pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT, line);
+                cmdbuf.Draw(4, 1, 0, 0);
+                ++rows_drawn;
+            }
+            if (rows_drawn == Eden::SwitchMenu::kRows)
+                Eden::SwitchMenu::RecordFullDraw(menu_ticket, menu_generation);
+        }
         cmdbuf.EndRenderPass();
     });
 }

@@ -16,6 +16,7 @@
 #include "assets_dir.h"
 #include "forwarded_launch.h"
 #include "emuhub_switch2_ticket.hpp"
+#include "emuhub_direct_nup.hpp"
 #include "gpu_failure.h"
 #include "guest_fault.h"
 #include "jit_list.h"
@@ -292,11 +293,23 @@ int main(int argc, char** argv) {
         Eden::FileExists("/app0/providers/switch2/eboot.bin");
     SCOPE_EXIT { if (nested_emuhub) ReturnToEmuHubFrontend(); };
     std::string provider_rom;
+    bool direct_nup = false;
     if (nested_emuhub) {
         Eden::EmuHubProviderMode() = true;
-        const auto ticket = emuhub_switch2::consume(emuhub_switch2::kRequest.data());
-        if (!ticket) return 2;
-        provider_rom = ticket->boot;
+        const auto requested = Eden::ParseForwardedArgs(argc, argv);
+        if (!requested.rom.empty()) {
+            // A direct NUP launch is an explicit signed-wheel invocation. It
+            // cannot be mixed with the legacy prepared-folder request.
+            if (!requested.exit_after_game ||
+                !emuhub_direct_nup::path_ok(requested.rom) ||
+                Eden::FileExists(emuhub_switch2::kRequest.data())) return 2;
+            provider_rom = requested.rom;
+            direct_nup = true;
+        } else {
+            const auto ticket = emuhub_switch2::consume(emuhub_switch2::kRequest.data());
+            if (!ticket) return 2;
+            provider_rom = ticket->boot;
+        }
     }
 #endif
     try {
@@ -325,7 +338,8 @@ int main(int argc, char** argv) {
 #endif
         Eden::FilesystemAccessStatus() = static_cast<int>(elevation::request(
             elevation::Capability::filesystem, Eden::EmuHubProviderMode() ? nullptr : "/app0/lapy.elf"));
-        if (nested_emuhub && (!Eden::FilesystemAccess() || !emuhub_switch2::ready())) return 2;
+        if (nested_emuhub && (!Eden::FilesystemAccess() ||
+            (direct_nup ? !emuhub_direct_nup::admit(provider_rom) : !emuhub_switch2::ready()))) return 2;
         Eden::BootTrace::Line("filesystem access returned status=%d, uid %d/%d gid %d/%d", Eden::FilesystemAccessStatus(),
                               static_cast<int>(getuid()), static_cast<int>(geteuid()), static_cast<int>(getgid()),
                               static_cast<int>(getegid()));

@@ -71,7 +71,7 @@ inline std::uint32_t DrawAllRows(std::uint64_t state, DrawRow draw_row) {
     return static_cast<std::uint32_t>(state >> 32);
 }
 
-// Vulkan uses the same height-based integer scaling as vulkan_hud_draw.inc.
+// Vulkan uses the same height-based integer scaling as the in-tree window adapt pass.
 // Reject a missing allocator, a zero-sized scissor, or any clipped row before
 // issuing a draw. The OpenGL path separately checks each actual DrawHud result.
 inline bool FitsVulkanMenu(std::uint32_t width, std::uint32_t height, bool hud_memory) {
