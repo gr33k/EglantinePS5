@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string_view>
 #include <set>
 #include <string>
@@ -58,6 +59,23 @@
 #include "core/loader/loader.h"
 
 namespace {
+std::mutex& DirectNupMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+std::string& DirectNupPath() {
+    static std::string path;
+    return path;
+}
+FileSys::VirtualFile& DirectNupFile() {
+    static FileSys::VirtualFile file;
+    return file;
+}
+FileSys::VirtualFile BoundDirectNup(const char* path) {
+    std::scoped_lock lock(DirectNupMutex());
+    return path && DirectNupPath() == path ? DirectNupFile() : FileSys::VirtualFile{};
+}
+
 constexpr std::array<const char*, 18> language_names{
     "AmericanEnglish", "BritishEnglish", "Japanese", "French", "German",
     "LatinAmericanSpanish", "Spanish", "Italian", "Dutch", "CanadianFrench",
@@ -236,6 +254,18 @@ int eden_write_cover_tga(const unsigned char* encoded, size_t size, const char* 
     return 1;
 }
 
+void eden_bind_direct_nup(const char* path, FileSys::VirtualFile file) {
+    std::scoped_lock lock(DirectNupMutex());
+    DirectNupPath() = path ? path : "";
+    DirectNupFile() = std::move(file);
+}
+
+void eden_clear_direct_nup() {
+    std::scoped_lock lock(DirectNupMutex());
+    DirectNupFile().reset();
+    DirectNupPath().clear();
+}
+
 uint64_t eden_game_title_id(const char* rom_path) {
     if (!rom_path) return 0;
     Common::FS::SetEdenPath(Common::FS::EdenPath::KeysDir, Eden::AssetsPath("keys"));
@@ -246,7 +276,8 @@ uint64_t eden_game_title_id(const char* rom_path) {
         return Eden::ExtractedTitleID(npdm);
     }
     FileSys::RealVfsFilesystem vfs;
-    const auto file = vfs.OpenFile(rom_path, FileSys::OpenMode::Read);
+    const auto bound = BoundDirectNup(rom_path);
+    const auto file = bound ? bound : vfs.OpenFile(rom_path, FileSys::OpenMode::Read);
     if (!file) return 0;
     std::string path = rom_path;
     std::transform(path.begin(), path.end(), path.begin(),
@@ -281,7 +312,8 @@ int eden_extract_game_metadata(const char* rom_path, const char* keys_dir,
     title[0] = '\0';
     Common::FS::SetEdenPath(Common::FS::EdenPath::KeysDir, keys_dir);
     FileSys::RealVfsFilesystem vfs;
-    const auto file = vfs.OpenFile(rom_path, FileSys::OpenMode::Read);
+    const auto bound = BoundDirectNup(rom_path);
+    const auto file = bound ? bound : vfs.OpenFile(rom_path, FileSys::OpenMode::Read);
     if (!file) return 0;
     std::string path = rom_path;
     std::transform(path.begin(), path.end(), path.begin(),
@@ -312,7 +344,8 @@ uint32_t eden_game_supported_languages(const char* rom_path, const char* keys_di
     try {
         Common::FS::SetEdenPath(Common::FS::EdenPath::KeysDir, keys_dir);
         FileSys::RealVfsFilesystem vfs;
-        const auto file = vfs.OpenFile(rom_path, FileSys::OpenMode::Read);
+        const auto bound = BoundDirectNup(rom_path);
+        const auto file = bound ? bound : vfs.OpenFile(rom_path, FileSys::OpenMode::Read);
         if (!file) return 0;
         std::string path = rom_path;
         std::transform(path.begin(), path.end(), path.begin(),

@@ -17,6 +17,7 @@
 #include "forwarded_launch.h"
 #include "emuhub_switch2_ticket.hpp"
 #include "emuhub_direct_nup.hpp"
+#include "held_nup_vfs.hpp"
 #include "gpu_failure.h"
 #include "guest_fault.h"
 #include "jit_list.h"
@@ -39,6 +40,7 @@ extern "C" size_t eden_heap_last_failure(unsigned*, size_t*);
 #include <mutex>
 #include <thread>
 #include <new>
+#include <memory>
 #include <string_view>
 #include <stdexcept>
 #include <fstream>
@@ -288,6 +290,7 @@ static void ReturnToEmuHubFrontend() {
 extern "C" int eden_emuhub_provider_mode() { return Eden::EmuHubProviderMode() ? 1 : 0; }
 
 int main(int argc, char** argv) {
+    std::shared_ptr<emuhub_direct_nup::HeldNupFd> held_nup;
 #ifdef PS5_NATIVE
     const bool nested_emuhub = Eden::FileExists("/app0/es-de/es-de.bin") &&
         Eden::FileExists("/app0/providers/switch2/eboot.bin");
@@ -313,6 +316,9 @@ int main(int argc, char** argv) {
     }
 #endif
     try {
+#ifdef PS5_NATIVE
+        SCOPE_EXIT { eden_clear_direct_nup(); };
+#endif
 #ifdef EDEN_PS5_RADV
         // Compute shaders reach RADV as NIR where translatable (nir_handoff.h; EDEN_NX2_NIR=0: SPIR-V).
         EdenRegisterNirBackend();
@@ -338,8 +344,26 @@ int main(int argc, char** argv) {
 #endif
         Eden::FilesystemAccessStatus() = static_cast<int>(elevation::request(
             elevation::Capability::filesystem, Eden::EmuHubProviderMode() ? nullptr : "/app0/lapy.elf"));
-        if (nested_emuhub && (!Eden::FilesystemAccess() ||
-            (direct_nup ? !emuhub_direct_nup::admit(provider_rom) : !emuhub_switch2::ready()))) return 2;
+        if (nested_emuhub) {
+            if (!Eden::FilesystemAccess()) return 2;
+            if (direct_nup) {
+                std::string bind_error;
+                for (const auto root : emuhub_direct_nup::kRoots) {
+                    if (!emuhub_direct_nup::under(provider_rom, root)) continue;
+                    held_nup = emuhub_direct_nup::HeldNupFd::OpenAt(
+                        provider_rom, root, 64ull * 1024 * 1024 * 1024, &bind_error);
+                    break;
+                }
+                if (!held_nup) {
+                    Eden::BootTrace::Line("direct NUP open failed: %s", bind_error.c_str());
+                    return 2;
+                }
+                eden_bind_direct_nup(provider_rom.c_str(),
+                                     std::make_shared<emuhub_direct_nup::HeldVfsFile>(held_nup));
+            } else if (!emuhub_switch2::ready()) {
+                return 2;
+            }
+        }
         Eden::BootTrace::Line("filesystem access returned status=%d, uid %d/%d gid %d/%d", Eden::FilesystemAccessStatus(),
                               static_cast<int>(getuid()), static_cast<int>(geteuid()), static_cast<int>(getgid()),
                               static_cast<int>(getegid()));
@@ -523,8 +547,11 @@ int main(int argc, char** argv) {
         bool forwarded_session = false;
         if (!forwarded.rom.empty() && last_crash.report.empty()) {
             std::string path = Eden::ResolveForwardedRom(forwarded.rom, Eden::AssetsPath("roms"));
-            if (const auto main = Eden::ExtractedGameMain(path); !main.empty()) path = main;
-            if (!path.empty() && Eden::FileExists(path)) forwarded_game = path;
+            if (!held_nup) {
+                if (const auto main = Eden::ExtractedGameMain(path); !main.empty()) path = main;
+            }
+            if (!path.empty() && ((held_nup && path == held_nup->Path()) || Eden::FileExists(path)))
+                forwarded_game = path;
             else launch_error = "Forwarded game not found: " + (path.empty() ? forwarded.rom : path);
 #ifdef PS5_NATIVE
             if (nested_emuhub && forwarded_game.empty()) return 2;
@@ -797,7 +824,8 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Vulkan is not available in this build yet. Select OpenGL in Settings > Video to play.");
 #endif
         Eden::Report("launch", Eden::BackendName(backend));
-        const bool game = std::filesystem::is_regular_file(selected_game);
+        const bool game = (held_nup && selected_game == held_nup->Path()) ||
+                          std::filesystem::is_regular_file(selected_game);
         if (!game) throw std::runtime_error("Selected ROM is no longer available");
         const char* guest = selected_game.c_str();
         // The audio and the renderer read this game's own settings (Library > Game settings).
@@ -1501,6 +1529,8 @@ int main(int argc, char** argv) {
             }
 #endif
             Core::System system;
+            if (held_nup && selected_game == held_nup->Path())
+                system.SetFilesystem(std::make_shared<emuhub_direct_nup::HeldNupFilesystem>(held_nup));
             SCOPE_EXIT { game_contents.ClearAllEntries(); };
             passed("core_constructed");
 #ifdef EDEN_PS5_OPENGL
