@@ -317,13 +317,8 @@ int main(int argc, char** argv) {
             proof_path = proof.path;
             direct_nup = true;
         } else if (!requested.rom.empty()) {
-            // A direct NUP launch is an explicit signed-wheel invocation. It
-            // cannot be mixed with the legacy prepared-folder request.
-            if (!requested.exit_after_game ||
-                !emuhub_direct_nup::path_ok(requested.rom) ||
-                Eden::FileExists(emuhub_switch2::kRequest.data())) return 2;
-            provider_rom = requested.rom;
-            direct_nup = true;
+            // Root NUP launch requires the authenticated one-use proof route.
+            return 2;
         } else {
             const auto ticket = emuhub_switch2::consume(emuhub_switch2::kRequest.data());
             if (!ticket) return 2;
@@ -364,22 +359,12 @@ int main(int argc, char** argv) {
             if (!Eden::FilesystemAccess()) return 2;
             if (direct_nup) {
                 std::string bind_error;
-                if (!proof_path.empty()) {
-                    const auto *authority = emuhub_nup_proof_authority();
-                    held_nup = emuhub_proof_admission::admit(
-                        proof_path, emuhub_proof_admission::kRequestRoot,
-                        authority, &bind_error);
-                    if (held_nup) provider_rom = held_nup->Path();
-                } else {
-                    for (const auto root : emuhub_direct_nup::kRoots) {
-                        if (!emuhub_direct_nup::under(provider_rom, root)) continue;
-                        held_nup = emuhub_direct_nup::HeldNupFd::OpenAt(
-                            provider_rom, root, 64ull * 1024 * 1024 * 1024, &bind_error);
-                        break;
-                    }
-                    if (held_nup && !held_nup->ValidateContainer(&bind_error))
-                        held_nup.reset();
-                }
+                if (proof_path.empty()) return 2;
+                const auto *authority = emuhub_nup_proof_authority();
+                held_nup = emuhub_proof_admission::admit(
+                    proof_path, emuhub_proof_admission::kRequestRoot,
+                    authority, &bind_error);
+                if (held_nup) provider_rom = held_nup->Path();
                 if (!held_nup) {
                     Eden::BootTrace::Line("direct NUP admission failed: %s", bind_error.c_str());
                     return 2;
