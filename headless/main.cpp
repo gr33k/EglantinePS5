@@ -290,6 +290,13 @@ static void ReturnToEmuHubFrontend() {
 
 extern "C" int eden_emuhub_provider_mode() { return Eden::EmuHubProviderMode() ? 1 : 0; }
 
+// A linked production authority may replace this weak default. Until then the
+// authenticated launch denies; the PS5 SDK must see a defined symbol.
+__attribute__((weak, noinline))
+const emuhub_proof_admission::Authority* emuhub_nup_proof_authority() {
+    return nullptr;
+}
+
 int main(int argc, char** argv) {
     std::shared_ptr<emuhub_direct_nup::HeldNupFd> held_nup;
 #ifdef PS5_NATIVE
@@ -358,12 +365,7 @@ int main(int argc, char** argv) {
             if (direct_nup) {
                 std::string bind_error;
                 if (!proof_path.empty()) {
-                    // The weak hook is supplied only by the signed Helper/Broker
-                    // integration. No key or nonce authority means deny.
-                    extern const emuhub_proof_admission::Authority*
-                        emuhub_nup_proof_authority() __attribute__((weak));
-                    const auto *authority = emuhub_nup_proof_authority
-                        ? emuhub_nup_proof_authority() : nullptr;
+                    const auto *authority = emuhub_nup_proof_authority();
                     held_nup = emuhub_proof_admission::admit(
                         proof_path, emuhub_proof_admission::kRequestRoot,
                         authority, &bind_error);
