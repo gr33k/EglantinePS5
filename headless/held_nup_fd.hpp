@@ -115,6 +115,31 @@ public:
         return true;
     }
 
+    // Fast path for a separately authenticated durable transfer receipt.
+    // It binds the held descriptor, but deliberately does not hash file bytes.
+    bool VerifyReceiptIdentityForRoot(const ExpectedSource& expected,
+                                      std::string_view root, std::string* error) const {
+        const auto fail = [&](const char* why) {
+            if (error) *error = why;
+            return false;
+        };
+        if (path_ != expected.path || root.empty() ||
+            path_.size() <= root.size() + 1 ||
+            path_.substr(0, root.size()) != root || path_[root.size()] != '/' ||
+            !SameIdentity(initial_, expected)) return fail("final identity");
+        struct stat current{};
+        if (::fstat(fd_, &current) != 0 || !S_ISREG(current.st_mode) ||
+            current.st_nlink != 1 || !SameIdentity(current, expected) ||
+            current.st_mtime != initial_.st_mtime ||
+            current.st_ctime != initial_.st_ctime)
+            return fail("final changed");
+        return true;
+    }
+
+    // A trusted receipt verifier uses this held-file stat to bind its private
+    // fsynced receipt and exclusive-writer ownership to the exact final inode.
+    bool CurrentStat(struct stat& out) const { return ::fstat(fd_, &out) == 0; }
+
     bool Verify(const ExpectedSource& expected, std::string* error) const {
         return VerifyForRoot(expected, RootForVolume(expected.volume_id), error);
     }

@@ -15,6 +15,12 @@
 namespace emuhub_proof_admission {
 namespace proof=emuhub_nup_proof;
 inline constexpr std::string_view kRequestRoot="/data/emuhub/broker/nup-requests";
+// The linked Helper must authenticate a durable, fsynced transfer receipt for
+// this exact held inode/source revision/digest and prove exclusive writer
+// ownership. No receipt, stale source, or ambiguous owner must deny. The
+// callback must not compute a new whole-file digest at Play time.
+using VerifyFinalReceipt = bool (*)(const proof::Record&,
+                                    const emuhub_direct_nup::HeldNupFd&, void*);
 struct Authority {
     proof::Bytes16 key_id{};
     proof::Bytes32 public_key{},provider_sha256{},pair_sha256{};
@@ -23,6 +29,8 @@ struct Authority {
     uid_t broker_uid=static_cast<uid_t>(-1);
     proof::ConsumeNonce consume_nonce=nullptr;
     void *nonce_context=nullptr;
+    VerifyFinalReceipt verify_final_receipt=nullptr;
+    void *receipt_context=nullptr;
 };
 inline bool verify_ed25519(std::span<const std::uint8_t> message,
                            std::span<const std::uint8_t,64> signature,
@@ -117,6 +125,8 @@ inline std::shared_ptr<emuhub_direct_nup::HeldNupFd> admit(
     if(!authority||!authority->consume_nonce||!authority->now_unix_ms||
        authority->broker_uid==static_cast<uid_t>(-1))
         return fail("proof authority unavailable");
+    if(!authority->verify_final_receipt)
+        return fail("verified transfer receipt unavailable; retransfer");
     std::vector<std::uint8_t> bytes;
     if(!read_record(path,request_root,authority->broker_uid,bytes))
         return fail("proof file");
@@ -140,8 +150,14 @@ inline std::shared_ptr<emuhub_direct_nup::HeldNupFd> admit(
         record.source.path,record.source.volume_id,record.source.device,
         record.source.inode,record.source.size,record.source.sha256,
         record.source.toc_sha256};
-    if(!held->Verify(expected,error)||!held->ValidateContainer(error))
-        return fail("proof source or NUP");
+    if(!held->VerifyReceiptIdentityForRoot(expected,root,error))
+        return fail("final identity changed; retransfer");
+    if(!held->ValidateContainer(error))
+        return fail("NUP index invalid; reprepare");
+    if(!authority->verify_final_receipt(record,*held,authority->receipt_context))
+        return fail("verified transfer receipt stale; retransfer");
+    if(!held->VerifyReceiptIdentityForRoot(expected,root,error))
+        return fail("final changed during admission; retransfer");
     return held;
 }
 } // namespace emuhub_proof_admission
