@@ -29,6 +29,38 @@ inline ForwardedArgs ParseForwardedArgs(int argc, char** argv) {
     return result;
 }
 
+struct ProofArgs {
+    bool requested=false, valid=false;
+    std::string path;
+};
+inline ProofArgs ParseProofArgs(int argc,char** argv) {
+    ProofArgs out;
+    if(argc<=0||!argv)return out;
+    for(int i=1;i<argc;++i)
+        if(argv[i]&&std::string_view(argv[i])=="--emuhub-proof")
+            out.requested=true;
+    if(!out.requested)return out;
+    if(argc!=4||!argv[1]||!argv[2]||!argv[3])return out;
+    constexpr std::string_view root="/data/emuhub/broker/nup-requests/";
+    bool exit=false;
+    for(int i=1;i<argc;++i) {
+        const std::string_view arg(argv[i]);
+        if(arg=="--exit-after-game") {
+            if(exit)return out;
+            exit=true;
+        } else if(arg=="--emuhub-proof") {
+            if(i+1>=argc||!argv[++i])return out;
+            out.path=argv[i];
+        } else return out;
+    }
+    if(!exit||!std::string_view(out.path).starts_with(root)||
+       out.path.size()!=root.size()+32+5||
+       !std::string_view(out.path).ends_with(".ehnp"))return out;
+    for(char c:std::string_view(out.path).substr(root.size(),32))
+        if(!((c>='0'&&c<='9')||(c>='a'&&c<='f')))return out;
+    out.valid=true;return out;
+}
+
 inline std::string ResolveForwardedRom(std::string_view rom, std::string_view roms_dir) {
     while (!rom.empty() && (rom.back() == ' ' || rom.back() == '\r' || rom.back() == '\n')) rom.remove_suffix(1);
     if (rom.empty()) return {};

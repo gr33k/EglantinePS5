@@ -13,6 +13,7 @@ superblock[:4]=b"NUP\x01"; struct.pack_into("<H",superblock,4,0x80)
 struct.pack_into("<Q",superblock,8,0x80); struct.pack_into("<Q",superblock,0x10,len(toc))
 superblock[0x18:0x38]=hashlib.sha256(toc).digest()
 struct.pack_into("<Q",superblock,0x38,0xb0); struct.pack_into("<Q",superblock,0x40,0xb1)
+struct.pack_into("<I",superblock,0x48,1)  # one package, matching the parser preflight
 p.write_bytes(superblock+toc+b"\0")
 PY
 ${CXX:-c++} -std=c++20 -O0 -Wall -Wextra -Werror -Iheadless tools/tests/test_emuhub_held_nup_fd.cpp -lcrypto -o "$scratch/held"

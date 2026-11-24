@@ -18,6 +18,7 @@
 #include "emuhub_switch2_ticket.hpp"
 #include "emuhub_direct_nup.hpp"
 #include "held_nup_vfs.hpp"
+#include "emuhub_proof_admission.hpp"
 #include "gpu_failure.h"
 #include "guest_fault.h"
 #include "jit_list.h"
@@ -296,11 +297,19 @@ int main(int argc, char** argv) {
         Eden::FileExists("/app0/providers/switch2/eboot.bin");
     SCOPE_EXIT { if (nested_emuhub) ReturnToEmuHubFrontend(); };
     std::string provider_rom;
+    std::string proof_path;
     bool direct_nup = false;
     if (nested_emuhub) {
         Eden::EmuHubProviderMode() = true;
+        const auto proof = Eden::ParseProofArgs(argc, argv);
+        if (proof.requested && !proof.valid) return 2;
         const auto requested = Eden::ParseForwardedArgs(argc, argv);
-        if (!requested.rom.empty()) {
+        if (proof.valid) {
+            if (!requested.rom.empty() ||
+                Eden::FileExists(emuhub_switch2::kRequest.data())) return 2;
+            proof_path = proof.path;
+            direct_nup = true;
+        } else if (!requested.rom.empty()) {
             // A direct NUP launch is an explicit signed-wheel invocation. It
             // cannot be mixed with the legacy prepared-folder request.
             if (!requested.exit_after_game ||
@@ -348,14 +357,29 @@ int main(int argc, char** argv) {
             if (!Eden::FilesystemAccess()) return 2;
             if (direct_nup) {
                 std::string bind_error;
-                for (const auto root : emuhub_direct_nup::kRoots) {
-                    if (!emuhub_direct_nup::under(provider_rom, root)) continue;
-                    held_nup = emuhub_direct_nup::HeldNupFd::OpenAt(
-                        provider_rom, root, 64ull * 1024 * 1024 * 1024, &bind_error);
-                    break;
+                if (!proof_path.empty()) {
+                    // The weak hook is supplied only by the signed Helper/Broker
+                    // integration. No key or nonce authority means deny.
+                    extern const emuhub_proof_admission::Authority*
+                        emuhub_nup_proof_authority() __attribute__((weak));
+                    const auto *authority = emuhub_nup_proof_authority
+                        ? emuhub_nup_proof_authority() : nullptr;
+                    held_nup = emuhub_proof_admission::admit(
+                        proof_path, emuhub_proof_admission::kRequestRoot,
+                        authority, &bind_error);
+                    if (held_nup) provider_rom = held_nup->Path();
+                } else {
+                    for (const auto root : emuhub_direct_nup::kRoots) {
+                        if (!emuhub_direct_nup::under(provider_rom, root)) continue;
+                        held_nup = emuhub_direct_nup::HeldNupFd::OpenAt(
+                            provider_rom, root, 64ull * 1024 * 1024 * 1024, &bind_error);
+                        break;
+                    }
+                    if (held_nup && !held_nup->ValidateContainer(&bind_error))
+                        held_nup.reset();
                 }
-                if (!held_nup || !held_nup->ValidateContainer(&bind_error)) {
-                    Eden::BootTrace::Line("direct NUP open failed: %s", bind_error.c_str());
+                if (!held_nup) {
+                    Eden::BootTrace::Line("direct NUP admission failed: %s", bind_error.c_str());
                     return 2;
                 }
                 eden_bind_direct_nup(provider_rom.c_str(),

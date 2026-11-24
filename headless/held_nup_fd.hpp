@@ -35,6 +35,12 @@ inline constexpr std::string_view RootForVolume(std::uint8_t id) {
     }
 }
 
+inline std::uint32_t ReadLe32(const std::uint8_t* data) {
+    std::uint32_t value = 0;
+    for (unsigned i = 0; i < 4; ++i) value |= std::uint32_t(data[i]) << (i * 8);
+    return value;
+}
+
 inline std::uint64_t ReadLe64(const std::uint8_t* data) {
     std::uint64_t value = 0;
     for (unsigned i = 0; i < 8; ++i) value |= std::uint64_t(data[i]) << (i * 8);
@@ -86,6 +92,8 @@ public:
             std::memcmp(super.data(), "NUP\x01", 4) != 0 ||
             (std::uint16_t(super[4]) | (std::uint16_t(super[5]) << 8)) < 0x80 ||
             ReadLe64(super.data() + 0x40) != Size()) return fail("NUP superblock");
+        if (ReadLe32(super.data() + 0x48) == 0 ||
+            ReadLe32(super.data() + 0x4c) != 0) return fail("NUP packages or flags");
         const auto toc_offset = ReadLe64(super.data() + 0x08);
         const auto toc_size = ReadLe64(super.data() + 0x10);
         const auto blob_offset = ReadLe64(super.data() + 0x38);
@@ -127,6 +135,8 @@ public:
             std::memcmp(super.data(), "NUP\x01", 4) != 0 ||
             (std::uint16_t(super[4]) | (std::uint16_t(super[5]) << 8)) < 0x80 ||
             ReadLe64(super.data() + 0x40) != expected.size) return fail("NUP superblock");
+        if (ReadLe32(super.data() + 0x48) == 0 ||
+            ReadLe32(super.data() + 0x4c) != 0) return fail("NUP packages or flags");
         const auto toc_offset = ReadLe64(super.data() + 0x08);
         const auto toc_size = ReadLe64(super.data() + 0x10);
         const auto blob_offset = ReadLe64(super.data() + 0x38);
